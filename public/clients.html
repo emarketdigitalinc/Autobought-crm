@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clients · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <div class="pagehead">
+      <div>
+        <h1>Clients</h1>
+        <div class="muted small">Signed dealers and what they're worth, plus the dealers being worked right now.</div>
+      </div>
+      <input id="q" type="search" placeholder="Search client, contact, city" style="width:260px" />
+    </div>
+
+    <div class="row" id="tiles" style="margin-bottom:16px"></div>
+    <div class="tabs" id="tabs" style="margin-bottom:14px"></div>
+
+    <div class="tablewrap cards-on-mobile">
+      <table>
+        <thead id="head"></thead>
+        <tbody id="rows"><tr><td class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const { api, esc, money, fmtWhen, tel } = CRM;
+    let status = (() => { try { return sessionStorage.getItem('clientTab') || 'active'; } catch (e) { return 'active'; } })();
+    const TABS = [['active', 'Active'], ['working', 'Working'], ['paused', 'Paused'], ['cancelled', 'Cancelled']];
+    const PAY = { none: '', link_created: 'Link ready', link_sent: 'Link sent', paid: 'Paid', past_due: 'Payment failed', cancelled: 'Sub cancelled' };
+    const payTone = { paid: 'signed', past_due: 'lost', cancelled: 'lost' };
+    const months = (m) => (m < 0.25 ? 'new' : m < 1 ? `${Math.max(1, Math.round(m * 4.35))} wk` : `${m} mo`);
+
+    async function load() {
+      const p = new URLSearchParams({ status });
+      if (q.value.trim()) p.set('q', q.value.trim());
+      const d = await api(`/clients?${p}`);
+      const s = d.summary;
+      const tile = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+      tiles.innerHTML = [
+        tile('Active clients', s.active_clients, s.churned ? `${s.churned} cancelled` : 'none cancelled'),
+        tile('Monthly value', money(s.mrr, 0), 'all active clients'),
+        tile('Avg client value', s.average_client_value === null ? '—' : money(s.average_client_value, 0), 'per month'),
+        tile('Lifetime value', money(s.lifetime_value, 0), 'billed since each started'),
+        tile('Pipeline', money(s.pipeline_value, 0), `${d.counts.working} being worked, est. at ${money(s.average_price_per_lead)}/lead${s.pipeline_unpriced ? ` (${s.pipeline_unpriced} unpriced)` : ''}`),
+      ].join('');
+
+      tabs.innerHTML = TABS.map(([k, l]) => `<button data-k="${k}" class="${k === status ? 'on' : ''}">${l} <span class="count">${d.counts[k]}</span></button>`).join('');
+      tabs.querySelectorAll('button').forEach((b) => b.onclick = () => { status = b.dataset.k; try { sessionStorage.setItem('clientTab', status); } catch (e) { /* private mode */ } load(); });
+
+      const call = (phone, leadId) => { const t = tel(phone); return t ? `<a class="btn good" href="tel:${esc(t)}" data-call="${esc(leadId)}">Call</a>` : ''; };
+      if (status === 'working') {
+        head.innerHTML = '<tr><th>Prospect</th><th>Contact</th><th>Sells</th><th class="num">Wants / mo</th><th class="num">Est. value</th><th class="num">In Working</th><th>Last activity</th><th>Owner</th><th></th></tr>';
+        rows.innerHTML = d.rows.map((r) => `<tr class="click" data-id="${esc(r.lead_id)}">
+          <td class="first"><strong>${esc(r.name || '—')}</strong><div class="small muted">${esc([r.city, r.province].filter(Boolean).join(', '))}</div></td>
+          <td>${esc(r.contact_name || '')}<div class="small muted">${esc(r.phone || '')}</div></td>
+          <td class="small">${esc(r.categories.join(', ') || '—')}</td>
+          <td class="num">${esc(r.leads_wanted || '—')}</td>
+          <td class="num">${r.estimated_value === null ? '<span class="muted">—</span>' : `${money(r.estimated_value, 0)}/mo`}</td>
+          <td class="num"><span class="badge ${r.days_in_stage > 7 ? 'lost' : r.days_in_stage > 3 ? 'working' : 'unknown'}">${r.days_in_stage}d</span></td>
+          <td class="small">${fmtWhen(r.last_activity_at)}</td>
+          <td class="small">${esc(r.account_manager)}</td>
+          <td>${call(r.phone, r.lead_id)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Nobody in Working right now.</td></tr>';
+      } else {
+        head.innerHTML = '<tr><th>Client</th><th>Contact</th><th>Package</th><th class="num">Monthly value</th><th class="num">Lifetime value</th><th class="num">Client for</th><th>Payment</th><th>Last activity</th><th>Account manager</th><th></th></tr>';
+        rows.innerHTML = d.rows.map((r) => `<tr class="click" data-id="${esc(r.lead_id)}">
+          <td class="first"><strong>${esc(r.name)}</strong><div class="small muted">${esc(r.categories.join(', '))} · ${esc(r.areas.join(', '))}</div></td>
+          <td>${esc(r.contact_name || '')}<div class="small muted">${esc(r.phone || '')}</div></td>
+          <td class="small">${esc(r.package)}<div class="muted">${r.leads_per_month}/mo at ${money(r.price_per_lead)}</div></td>
+          <td class="num"><strong>${money(r.contract_value, 0)}</strong>${r.status !== 'active' ? '<div class="small muted">not billing</div>' : ''}</td>
+          <td class="num">${money(r.lifetime_value, 0)}${r.collected ? `<div class="small muted">${money(r.collected, 0)} collected</div>` : ''}</td>
+          <td class="num small">${months(r.months_as_client)}<div class="muted">since ${esc(r.start_date)}</div></td>
+          <td>${PAY[r.payment_status] ? `<span class="badge ${payTone[r.payment_status] || 'working'}">${PAY[r.payment_status]}</span>` : '<span class="muted small">—</span>'}</td>
+          <td class="small">${fmtWhen(r.last_activity_at)}</td>
+          <td class="small">${esc(r.account_manager)}</td>
+          <td>${call(r.phone, r.lead_id)}</td></tr>`).join('') || `<tr><td colspan="10" class="muted">No ${status} clients.</td></tr>`;
+      }
+      rows.querySelectorAll('tr.click').forEach((tr) => tr.onclick = (e) => {
+        if (e.target.closest('a')) return;
+        location.href = `/lead.html?id=${encodeURIComponent(tr.dataset.id)}`;
+      });
+      rows.querySelectorAll('a[data-call]').forEach((a) => a.onclick = () => {
+        api(`/leads/${encodeURIComponent(a.dataset.call)}/activities`, { method: 'POST', body: { type: 'call', body: 'Tapped call from Clients' } }).catch(() => {});
+      });
+    }
+    let t;
+    q.oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
+    CRM.header('clients').then(load).catch((e) => CRM.toast(e.message, true));
+  </script>
+</body>
+</html>

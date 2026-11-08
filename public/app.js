@@ -33,7 +33,7 @@ const CRM = (() => {
   async function header(active) {
     meta = await api('/meta');
     // The dashboard (ad spend, revenue, commission, team) is admin-only.
-    const links = [['index', 'Leads'], ['map', 'Coverage map'], ...(meta.me.role === 'admin' ? [['dashboard', 'Overview']] : [])];
+    const links = [['index', 'Leads'], ['clients', 'Clients'], ['map', 'Coverage map'], ...(meta.me.role === 'admin' ? [['dashboard', 'Overview']] : [])];
     const h = document.createElement('header');
     h.className = 'top';
     h.innerHTML = `<a class="brand" href="/index.html">Autobought <span>CRM</span></a>

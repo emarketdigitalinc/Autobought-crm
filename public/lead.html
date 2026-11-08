@@ -18,6 +18,7 @@
       </div>
       <div id="stagebadge"></div>
     </div>
+    <div class="row" id="valueStrip" style="margin-bottom:16px" hidden></div>
 
     <div class="row">
       <div class="grow" style="flex:1 1 380px">
@@ -37,7 +38,7 @@
         </div>
 
         <div class="card" id="dealCard" hidden>
-          <h2>Deal</h2>
+          <h2>Account</h2>
           <div id="deal"></div>
         </div>
 
@@ -140,7 +141,22 @@
       document.title = `${l.name || 'Lead'} · Autobought CRM`;
       document.getElementById('title').textContent = l.name || 'No name';
       document.getElementById('subtitle').textContent = [l.dealership, l.city].filter(Boolean).join(' · ');
-      document.getElementById('stagebadge').innerHTML = stageBadge(l.stage) + (l.lost_reason ? ` <span class="muted small">${esc(l.lost_reason)}</span>` : '');
+      document.getElementById('stagebadge').innerHTML = l.stage === 'signed'
+        ? `<span class="badge signed">Client</span>${data.deal && data.deal.status !== 'active' ? ` <span class="badge">${esc(data.deal.status)}</span>` : ''}`
+        : stageBadge(l.stage) + (l.lost_reason ? ` <span class="muted small">${esc(l.lost_reason)}</span>` : '');
+      // Customer value, for a signed dealer.
+      const vs = document.getElementById('valueStrip');
+      vs.hidden = !data.client;
+      if (data.client) {
+        const c = data.client;
+        const tile = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+        vs.innerHTML = [
+          tile('Monthly value', money(c.contract_value, 0), data.deal.status === 'active' ? 'billing now' : `${esc(data.deal.status)}, not billing`),
+          tile('Lifetime value', money(c.lifetime_value, 0), `${c.months_billed} month${c.months_billed === 1 ? '' : 's'} billed`),
+          tile('Collected', money(c.collected, 0), 'through Stripe'),
+          tile('Client for', c.months_as_client < 0.25 ? 'New' : c.months_as_client < 1 ? `${Math.max(1, Math.round(c.months_as_client * 4.35))} wk` : `${c.months_as_client} mo`, `since ${esc(data.deal.start_date)}`),
+        ].join('');
+      }
 
       const t = tel(l.phone);
       const waiting = !l.first_contact_at;

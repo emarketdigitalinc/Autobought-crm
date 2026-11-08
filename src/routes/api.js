@@ -123,6 +123,7 @@ router.get('/leads/:id', (req, res) => {
     activities,
     coverage: geo.coverageFor(lead),
     deal: deals.dealForLead(lead.id),
+    client: (() => { const d = db.prepare('SELECT * FROM deals WHERE lead_id = ?').get(lead.id); return d ? require('../clients').valueOf(d) : null; })(),
     capi: db.prepare('SELECT stage, event_name, status, attempts, last_error, sent_at FROM capi_events WHERE lead_id = ? ORDER BY id').all(lead.id),
   });
 });
@@ -237,6 +238,11 @@ router.post('/ads/sync', auth.requireAdmin, wrap(async (req, res) => {
 router.post('/ads/:adId/source', auth.requireAdmin, (req, res) => {
   res.json({ ad_id: req.params.adId, source_override: ads.setSourceOverride(req.params.adId, (req.body || {}).source) });
 });
+
+// --- Clients ----------------------------------------------------------------------------------
+
+// Signed dealers as accounts with their value, plus the prospects being worked.
+router.get('/clients', (req, res) => res.json(require('../clients').list({ status: String(req.query.status || 'active'), q: req.query.q })));
 
 // --- Coverage map --------------------------------------------------------------------------
 
