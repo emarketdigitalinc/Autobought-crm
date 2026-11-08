@@ -229,6 +229,49 @@ async function updateAreas(dealId, input, actorId) {
   return { deal: fresh };
 }
 
+function markAwaitingPayment(dealId) {
+  db.prepare("UPDATE deals SET handoff_status = 'awaiting_payment', handoff_error = NULL, updated_at = ? WHERE id = ?").run(nowISO(), dealId);
+  const d = getDeal(dealId);
+  logActivity(d.lead_id, 'handoff', 'Portal handoff will run as soon as the dealer pays.');
+}
+
+// Send the Stripe link to the dealer: a text to the lead's phone, or an email
+// to the portal address. Paying on their phone while Mike is on the call.
+async function sendPaymentLink(dealId, via, actorId) {
+  const stripe = require('./stripe');
+  const { sendSms } = require('./notify');
+  const deal = getDeal(dealId);
+  if (!deal) return { error: 'Deal not found.' };
+  let url;
+  try { url = await stripe.paymentLink(deal); } catch (err) { return { error: err.message }; }
+  if (via === 'link') return { url };
+  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(deal.lead_id);
+  const first = String(lead.name || '').split(' ')[0] || 'there';
+  const amount = `$${deal.monthly_value.toFixed(2)}/month`;
+  let result;
+  try {
+    if (via === 'text') {
+      if (!lead.phone) return { error: 'This lead has no phone number.' };
+      result = await sendSms({ to: lead.phone, body: `Hi ${first}, here's your Autobought sign-up link (${deal.leads_per_month} leads/month, ${amount}). Pay securely by card, Apple Pay or Google Pay: ${url}` });
+    } else if (via === 'email') {
+      result = await sendEmail({
+        to: deal.portal_email, from: config.welcomeFrom(),
+        subject: `Your Autobought sign-up: ${deal.leads_per_month} leads/month`,
+        text: `Hi ${first},\n\nThanks for signing up with Autobought. Here's your secure payment link for ${deal.leads_per_month} ${PACKAGE_LABELS[deal.package]} leads a month at $${deal.price_per_lead}/lead (${amount}):\n\n${url}\n\nYour dealer portal is set up as soon as payment goes through.\n\nThe Autobought team`,
+        html: `<p>Hi ${esc(first)},</p><p>Thanks for signing up with Autobought. Here's your secure payment link for <strong>${deal.leads_per_month} ${esc(PACKAGE_LABELS[deal.package])} leads a month</strong> at $${deal.price_per_lead}/lead (${esc(amount)}).</p><p><a href="${esc(url)}" style="display:inline-block;background:#1263b4;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:bold">Pay and activate</a></p><p>Your dealer portal is set up as soon as payment goes through.</p>`,
+      });
+    } else {
+      return { error: 'Send by text or email.' };
+    }
+  } catch (err) {
+    return { error: err.message };
+  }
+  const how = result.sent ? 'sent' : result.simulated ? 'simulated (not configured)' : `not sent (${result.detail})`;
+  logActivity(deal.lead_id, via === 'text' ? 'text' : 'email', `Payment link ${via === 'text' ? 'texted' : 'emailed'} to the dealer: ${how}.`, actorId);
+  if (result.sent || result.simulated) db.prepare("UPDATE deals SET payment_status = CASE WHEN payment_status IN ('none','link_created') THEN 'link_sent' ELSE payment_status END WHERE id = ?").run(dealId);
+  return { url, sent: Boolean(result.sent), simulated: Boolean(result.simulated), detail: result.detail };
+}
+
 // --- Handoff to the lead bank ------------------------------------------------------
 
 const tempPassword = () => crypto.randomBytes(12).toString('base64url').replace(/[-_]/g, 'x').slice(0, 14);
@@ -367,5 +410,5 @@ async function sendWelcome(deal, lead, password) {
 }
 
 module.exports = {
-  validateDealInput, saveDeal, getDeal, dealForLead, updateDeal, updateAreas, revenueReport, runHandoff, billsIn, welcomeMessage, thisMonth,
+  validateDealInput, saveDeal, getDeal, dealForLead, updateDeal, updateAreas, markAwaitingPayment, sendPaymentLink, revenueReport, runHandoff, billsIn, welcomeMessage, thisMonth,
 };

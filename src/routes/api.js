@@ -59,6 +59,7 @@ router.get('/meta', (req, res) => {
     users: db.prepare('SELECT id, name, commission_rate FROM users WHERE active = 1 ORDER BY name').all(),
     provinces: Object.entries(require('../db').PROVINCES).map(([code, name]) => ({ code, name })),
     leadbank_connected: leadbank.isConfigured(),
+    stripe_connected: require('../stripe').isConfigured(),
     me: req.user,
   });
 });
@@ -167,6 +168,13 @@ router.post('/leads/:id/activities', (req, res) => {
   res.status(201).json(result);
 });
 
+// Payment link: { via: 'link' | 'text' | 'email' }.
+router.post('/deals/:id/payment-link', wrap(async (req, res) => {
+  const r = await deals.sendPaymentLink(Number(req.params.id), (req.body || {}).via || 'link', req.user.id);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json(r);
+}));
+
 router.post('/leads/:id/handoff', wrap(async (req, res) => {
   const deal = deals.dealForLead(req.params.id);
   if (!deal) return res.status(404).json({ error: 'This lead has no deal yet. Move it to Signed first.' });
@@ -182,9 +190,23 @@ router.put('/deals/:id/areas', wrap(async (req, res) => {
 }));
 
 router.patch('/deals/:id', (req, res) => {
+  // Commission and who earns it are the owner's call, set on the Overview.
+  const b = req.body || {};
+  if ((b.commission_rate !== undefined || b.account_manager_id !== undefined) && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an admin can change commission.' });
+  }
   const result = deals.updateDeal(Number(req.params.id), req.body || {}, req.user.id);
   if (result.error) return res.status(400).json({ error: result.error });
   res.json(result);
+});
+
+// The owner's overview: targets, the month's accounting, dealer accounts.
+router.get('/overview', auth.requireAdmin, wrap(async (req, res) => res.json(await require('../overview').overview(req.query.month))));
+
+router.put('/targets', auth.requireAdmin, (req, res) => {
+  const r = require('../overview').saveTargets((req.body || {}).month, (req.body || {}).targets);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json(r);
 });
 
 router.get('/revenue', auth.requireAdmin, (req, res) => res.json(deals.revenueReport(req.query.month)));

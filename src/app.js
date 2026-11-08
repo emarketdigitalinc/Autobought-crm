@@ -18,7 +18,7 @@ function buildApp() {
   app.use(attachUser);
   app.use('/api', require('./routes/api'));
 
-  const OPEN = new Set(['/login.html', '/styles.css', '/app.js', '/favicon.svg']);
+  const OPEN = new Set(['/login.html', '/paid.html', '/styles.css', '/app.js', '/favicon.svg']);
   app.get('/', (req, res) => res.redirect(req.user ? '/index.html' : '/login.html'));
   app.use((req, res, next) => (OPEN.has(req.path) || !req.path.endsWith('.html') ? next() : requireUser(req, res, next)));
   app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -60,5 +60,12 @@ module.exports = {
     return map;
   },
 
+  // Stripe: payment links for signed dealers.
+  stripeKey: () => env('STRIPE_SECRET_KEY'),
+  stripeWebhookSecret: () => env('STRIPE_WEBHOOK_SECRET'),
+  stripeAutomaticTax: () => env('STRIPE_AUTOMATIC_TAX') === 'true',
+  // With Stripe connected, the portal login is only created once they've paid.
+  handoffAfterPayment: () => Boolean(env('STRIPE_SECRET_KEY')) && env('HANDOFF_AFTER_PAYMENT', 'true') !== 'false',
+
   runScheduler: () => env('RUN_SCHEDULER', 'true') !== 'false',
 };

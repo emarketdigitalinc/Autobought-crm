@@ -77,8 +77,7 @@ function fromMetaLead(lead, hint = {}) {
 
 // Jotform's webhook posts multipart fields; the answers are one JSON string
 // (rawRequest) keyed like "q7_whatDo". `pretty` holds the real question
-// labels ("What do you sell?:Cars, Trucks"), which match far better, so both
-// are read: labels first.
+// labels ("What do you sell?:Cars, Trucks"); both are read.
 function prettyEntries(pretty) {
   if (!pretty) return [];
   return String(pretty)
@@ -94,7 +93,10 @@ function fromJotform(body) {
   let answers = {};
   try { answers = JSON.parse(body.rawRequest || '{}'); } catch (e) { answers = {}; }
   const rawEntries = Object.entries(answers).filter(([k]) => /^q\d+_/.test(k));
-  const fields = mapFields([...prettyEntries(body.pretty), ...rawEntries]);
+  // Structured answers first: they're exact. The pretty labels fill in any
+  // field whose generated name we don't recognise. (Pretty text can't be split
+  // reliably when a question's own label contains commas, e.g. a consent line.)
+  const fields = mapFields([...rawEntries, ...prettyEntries(body.pretty)]);
 
   // Hidden fields carry the UTMs, and sometimes the Meta ids if the ad's URL
   // passes {{campaign.id}} etc. Read any we recognise.

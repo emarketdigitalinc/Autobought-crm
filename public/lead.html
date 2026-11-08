@@ -95,7 +95,6 @@
         <div class="field"><label>Price per lead ($)</label><input id="sPrice" type="number" min="0" step="0.01" required /></div>
         <div class="field"><label>Start date</label><input id="sStart" type="date" required /></div>
         <div class="field"><label>Account manager</label><select id="sAm"></select></div>
-        <div class="field"><label>Commission (%)</label><input id="sRate" type="number" min="0" max="100" step="0.5" /></div>
         <div class="field"><label>Lead bank sharing</label><select id="sMode"><option value="shared">Shared</option><option value="exclusive">Exclusive</option></select></div>
       </div>
       <h3>Monthly lead quota by category</h3>
@@ -227,23 +226,59 @@
         failed: `<div class="notice bad">Handoff stopped: ${esc(d.handoff_error)}</div>`,
         skipped: `<div class="notice warn">${esc(d.handoff_error)}</div>`,
         pending: '<div class="notice warn">Handoff not finished.</div>',
-      }[d.handoff_status];
-      document.getElementById('deal').innerHTML = `${handoff}
-        ${d.handoff_status !== 'done' ? '<p><button id="retryHandoff" class="primary">Retry handoff</button></p>' : ''}
+        awaiting_payment: '<div class="notice warn">Waiting for payment. Their portal login is created the moment they pay.</div>',
+      }[d.handoff_status] || '';
+      const PAY = { none: 'Not paid', link_created: 'Link ready', link_sent: 'Link sent', paid: 'Paid', past_due: 'Payment failed', cancelled: 'Subscription cancelled' };
+      const payTone = { paid: 'signed', past_due: 'lost', cancelled: 'lost' }[d.payment_status] || 'working';
+      const payBlock = CRM.meta.stripe_connected
+        ? `<div class="paybox">
+            <div><strong>Payment</strong> <span class="badge ${payTone}">${PAY[d.payment_status] || esc(d.payment_status)}</span>
+              <span class="small muted">${money(d.monthly_value)}/month by card, Apple Pay or Google Pay</span></div>
+            ${d.payment_status === 'paid' ? `<div class="small muted">Paid ${fmtWhen(d.paid_at)} through Stripe.</div>` : `
+            <div class="row" style="gap:6px;margin-top:8px">
+              <button data-pay="text" class="good">Text link to dealer</button>
+              <button data-pay="email">Email link</button>
+              <button data-pay="copy">Copy link</button>
+              <button data-pay="open">Take payment now</button>
+            </div>
+            <div class="small muted" style="margin-top:6px">"Take payment now" opens Stripe here so you can enter their card while you're on the phone.</div>`}
+          </div>`
+        : '<p class="small muted">Connect Stripe to collect payment from here (text or email a payment link, or take the card on the phone).</p>';
+      const retryLabel = d.handoff_status === 'awaiting_payment' ? 'Hand off now without waiting for payment' : 'Retry handoff';
+      document.getElementById('deal').innerHTML = `${handoff}${payBlock}
+        ${d.handoff_status !== 'done' ? `<p><button id="retryHandoff" class="${d.handoff_status === 'awaiting_payment' ? '' : 'primary'}">${retryLabel}</button></p>` : ''}
         <dl class="kv">
           <dt>Status</dt><dd><select id="dStatus">${CRM.meta.deal_statuses.map((s) => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></dd>
           <dt>Package</dt><dd>${esc(d.package === 'application' ? 'Application' : 'Essential')}, ${d.leads_per_month} leads/month</dd>
           <dt>Quotas</dt><dd>${d.quotas.map((q) => `${esc(CAT[q.category])} ${q.monthly_quota}`).join(' · ')}</dd>
           <dt>Lead areas</dt><dd>${d.areas.map((a) => esc(a.label)).join(', ')} <button id="dAreas" class="small-btn">Edit areas</button></dd>
-          <dt>Price per lead</dt><dd>${money(d.price_per_lead)}</dd>
+          <dt>Price per lead</dt><dd>${money(d.price_per_lead)} <button id="dEdit" class="small-btn">Change</button></dd>
           <dt>Monthly value</dt><dd>${money(d.monthly_value)}</dd>
           <dt>Start date</dt><dd>${esc(d.start_date)}${d.end_date ? ` → ${esc(d.end_date)}` : ''}</dd>
-          <dt>Account manager</dt><dd>${esc(d.account_manager_name || '—')} (${pct(d.commission_rate)} = ${money(d.monthly_value * d.commission_rate)}/mo)</dd>
+          <dt>Account manager</dt><dd>${esc(d.account_manager_name || '—')}</dd>
           <dt>Portal login</dt><dd>${esc(d.portal_email)}</dd>
-        </dl>
-        <p class="small"><button id="dEdit">Edit price / commission</button></p>`;
+        </dl>`;
       const r = document.getElementById('retryHandoff');
-      if (r) r.onclick = async () => { r.disabled = true; try { await api(`/leads/${encodeURIComponent(id)}/handoff`, { method: 'POST' }); } catch (e) { toast(e.message, true); } load(); };
+      if (r) r.onclick = async () => {
+        if (d.handoff_status === 'awaiting_payment' && !confirm('Create their portal login before they have paid?')) return;
+        r.disabled = true;
+        try { await api(`/leads/${encodeURIComponent(id)}/handoff`, { method: 'POST' }); } catch (e) { toast(e.message, true); }
+        load();
+      };
+      document.querySelectorAll('[data-pay]').forEach((b) => b.onclick = async () => {
+        const how = b.dataset.pay;
+        // Open the tab first (in the click) so phones don't block it as a pop-up.
+        const tab = how === 'open' ? window.open('', '_blank') : null;
+        b.disabled = true;
+        try {
+          const res = await api(`/deals/${d.id}/payment-link`, { method: 'POST', body: { via: how === 'text' || how === 'email' ? how : 'link' } });
+          if (how === 'copy') { await navigator.clipboard.writeText(res.url).catch(() => prompt('Copy this link', res.url)); toast('Payment link copied'); }
+          else if (how === 'open') { if (tab) tab.location = res.url; else location.href = res.url; }
+          else toast(res.sent ? `Payment link ${how === 'text' ? 'texted' : 'emailed'}` : res.simulated ? `Simulated: ${how} isn't connected yet` : `Not sent: ${res.detail}`, !res.sent && !res.simulated);
+        } catch (e) { if (tab) tab.close(); toast(e.message, true); }
+        b.disabled = false;
+        load();
+      });
       document.getElementById('dStatus').onchange = async (e) => {
         try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { status: e.target.value } }); toast('Deal updated'); } catch (err) { toast(err.message, true); }
         load();
@@ -252,9 +287,7 @@
       document.getElementById('dEdit').onclick = async () => {
         const price = prompt('Price per lead ($)', d.price_per_lead);
         if (price === null) return;
-        const rate = prompt('Commission (%)', Math.round(d.commission_rate * 1000) / 10);
-        if (rate === null) return;
-        try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { price_per_lead: Number(price), commission_rate: Number(rate) / 100 } }); toast('Deal updated'); } catch (err) { toast(err.message, true); }
+        try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { price_per_lead: Number(price) } }); toast('Price updated'); } catch (err) { toast(err.message, true); }
         load();
       };
     }
@@ -298,10 +331,7 @@
       sPackage.innerHTML = CRM.meta.packages.map((p) => `<option value="${p.key}" ${d && d.package === p.key ? 'selected' : ''}>${p.label}</option>`).join('');
       sPrice.value = d ? d.price_per_lead : '';
       sStart.value = (d && d.start_date) || new Date().toISOString().slice(0, 10);
-      sAm.innerHTML = CRM.meta.users.map((u) => `<option value="${u.id}" data-rate="${u.commission_rate}" ${(d ? d.account_manager_id : l.owner_id) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
-      const setRate = () => { const o = sAm.selectedOptions[0]; sRate.value = o ? Math.round(Number(o.dataset.rate) * 1000) / 10 : 0; };
-      if (d) sRate.value = Math.round(d.commission_rate * 1000) / 10; else setRate();
-      sAm.onchange = setRate;
+      sAm.innerHTML = CRM.meta.users.map((u) => `<option value="${u.id}" ${(d ? d.account_manager_id : l.owner_id) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
       const sells = String(l.categories || '').split(',').filter(Boolean);
       const want = Number(l.leads_wanted_n) || '';
       sQuotas.innerHTML = CRM.meta.categories.map((c) => {
@@ -315,7 +345,7 @@
       const preview = () => {
         const n = [...sQuotas.querySelectorAll('input')].reduce((a, i) => a + (Number(i.value) || 0), 0);
         const v = n * (Number(sPrice.value) || 0);
-        sValue.textContent = `${n} leads/month × ${money(Number(sPrice.value) || 0)} = ${money(v)}/month · commission ${money(v * (Number(sRate.value) || 0) / 100)}/month`;
+        sValue.textContent = `${n} leads/month × ${money(Number(sPrice.value) || 0)} = ${money(v)}/month${CRM.meta.stripe_connected ? '. A Stripe payment link is created when you sign.' : ''}`;
       };
       signForm.oninput = preview;
       preview();
@@ -332,7 +362,7 @@
         stage: 'signed',
         deal: {
           dealer_name: sDealer.value, portal_email: sEmail.value, package: sPackage.value, price_per_lead: sPrice.value,
-          start_date: sStart.value, account_manager_id: sAm.value, commission_rate: (Number(sRate.value) || 0) / 100,
+          start_date: sStart.value, account_manager_id: sAm.value,
           distribution_mode: sMode.value, quotas, areas: signPicker ? signPicker.get() : [],
         },
       };
@@ -340,7 +370,8 @@
       try {
         const r = await api(`/leads/${encodeURIComponent(id)}/stage`, { method: 'POST', body });
         signDlg.close();
-        toast(r.deal && r.deal.handoff_status === 'done' ? 'Signed and handed off to the portal' : 'Signed. Check the handoff on the deal panel.', r.deal && r.deal.handoff_status === 'failed');
+        const hs = r.deal && r.deal.handoff_status;
+        toast(hs === 'done' ? 'Signed and handed off to the portal' : hs === 'awaiting_payment' ? 'Signed. Send them the payment link from the deal panel.' : 'Signed. Check the handoff on the deal panel.', hs === 'failed');
         load();
       } catch (err) {
         signErr.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`;

@@ -27,7 +27,7 @@ dealers (Jotform) ─┘    first)    │          └─► lead bank consumer 
 | **Leads** (`/index.html`) | One table, stage filter tabs, A/B filter, search. Shows how many signed dealers already cover the lead's area, minutes to first contact (or how long it has been waiting), and a Call button. Average time to first contact at the top. Becomes cards on a phone. |
 | **Lead** (`/lead.html?id=`) | Tap-to-call, details, a map of where they are and which signed dealers already cover that spot, stage buttons (Lost asks for a reason, Signed asks for the deal and its lead areas), call/text/email/note log, activity history, where it came from, what was sent to Meta, and the deal + handoff status. |
 | **Coverage map** (`/map.html`) | Canada with every signed dealer's areas: provinces shaded by how many dealers take them, radius circles, dealer leads as pins. Click anywhere to see who covers it; click a dealer to highlight their areas; filter by category. |
-| **Dashboard** (`/dashboard.html`) | **Admins only.** Ad spend, cost per lead / Working / Signed, A vs B and by ad, with a date filter. Revenue and commission by month and account manager, 12-month trend. Team settings: who gets new-lead texts, commission %. |
+| **Overview** (`/dashboard.html`) | **Admins only.** Monthly targets against actuals (with a pace marker), the month's accounting (billed, collected by Stripe, ad spend, commission, margin, leads delivered), dealer accounts (leads sent vs quota, payment status, commission per dealer), commission by account manager, a 12-month trend, the ads breakdown (A vs B, by ad, date filter) and team settings. |
 
 ## How each part works
 
@@ -38,7 +38,13 @@ Jotform retries of the same submission are recognised and ignored.
 
 - **A, Instant Form.** Meta's webhook only carries a lead id; the answers plus
   campaign, ad set and ad are fetched from the Graph API.
-- **B, landing page.** Jotform's own webhook. Fields are recognised from the
+- **B, landing page.** Jotform's own webhook. The form for the new lander is
+  *Autobought Dealer Partner Program* (Jotform 263114714910046), with hidden
+  fields `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`
+  and `fbclid` that Jotform fills from the page's URL. When embedding it on the
+  lander, pass the page's query string through to the form (Jotform's embed
+  does this when the parameter names match the fields' unique names; check
+  them under each hidden field's *Advanced › Field Details*). Fields are recognised from the
   question labels (both the *Check AutoBought Lead Availability* and *AutoBought
   Dealer Inquiry* forms map correctly). Campaign and ad come from UTM hidden
   fields: add hidden fields named `utm_source`, `utm_medium`, `utm_campaign`,
@@ -112,10 +118,25 @@ Each step is remembered, so if one fails the lead shows **Retry handoff** and
 carries on where it stopped (no duplicate dealers). If the welcome email has to
 be resent, a fresh password is issued, because the first one was never stored.
 
+**Payments (Stripe).** With `STRIPE_SECRET_KEY` set, signing a dealer creates a
+Stripe Checkout link for a monthly subscription (leads/month × price per lead,
+CAD). From the deal panel: **Text link to dealer** (they pay on their phone by
+card, Apple Pay or Google Pay), **Email link**, **Copy link**, or **Take payment
+now**, which opens Stripe so you can key in their card while you're on the call.
+Their portal login is only created once Stripe confirms payment
+(`HANDOFF_AFTER_PAYMENT`, on by default); a button lets you hand off without
+waiting. Stripe's webhook keeps each deal's status current (paid, payment
+failed, cancelled) and records every paid invoice for the Overview's
+"Collected" figure. Turn on `STRIPE_AUTOMATIC_TAX` once Stripe Tax is set up for
+GST/HST. Tap-to-pay on a phone (card held against the phone) would need a
+native app and Stripe Terminal; it isn't built.
+
 **8. Deals and commission.** Per signed dealer: package, leads/month, price per
 lead, monthly value (leads × price unless set), start date, status
 (active/paused/cancelled), account manager and commission rate (copied from the
-account manager when signed; Mike = 20%, change it on the Team table). The
+account manager when signed; Mike = 20%). Commission isn't part of signing:
+it's set on the Overview, per account manager (Team) and per dealer (Dealer
+accounts), and only admins can change it. The
 revenue report counts a deal in every month from its start date until its end
 date. Pausing stops it counting from the current month on; months already past
 are unchanged. Months are billed in full (no part-month proration).
@@ -157,6 +178,7 @@ curl -X POST localhost:3100/webhooks/lead -H 'x-webhook-secret: <WEBHOOK_SECRET>
 3. In the lead bank, create a **staff** login for the CRM (Settings › Users) and
    put it in `LEADBANK_EMAIL` / `LEADBANK_PASSWORD`. Create (or choose) the
    consumer funnel shoppers should go to and set `CONSUMER_FUNNEL_ID`.
+   For Stripe, add the webhook endpoint listed in `.env.example`.
 4. Point the Meta leadgen webhook and the Jotform webhook at the CRM (URLs in
    `.env.example`). If Zapier currently sends dealer leads anywhere, switch
    that off once these are live, or the CRM will just merge the duplicates.
@@ -165,8 +187,8 @@ curl -X POST localhost:3100/webhooks/lead -H 'x-webhook-secret: <WEBHOOK_SECRET>
 
 ## API
 
-Webhooks: `GET/POST /webhooks/meta`, `POST /webhooks/jotform?secret=`, `POST /webhooks/lead`.
+Webhooks: `GET/POST /webhooks/meta`, `POST /webhooks/jotform?secret=`, `POST /webhooks/stripe`, `POST /webhooks/lead`.
 Staff (cookie session): `/api/leads`, `/api/leads/:id` (GET, PATCH),
 `/api/leads/:id/stage`, `/api/leads/:id/activities`, `/api/leads/:id/handoff`,
 `/api/deals/:id`, `/api/dashboard`, `/api/ads/sync`, `/api/ads/:id/source`,
-`/api/revenue?month=`, `/api/map`, `/api/geocode?q=`, `/api/deals/:id/areas` (PUT), `/api/users`.
+`/api/revenue?month=`, `/api/overview?month=`, `/api/targets` (PUT), `/api/deals/:id/payment-link`, `/api/map`, `/api/geocode?q=`, `/api/deals/:id/areas` (PUT), `/api/users`.

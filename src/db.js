@@ -264,6 +264,33 @@ db.exec(`
   );
 `);
 
+// Payments and targets, added after the first release: created/extended in
+// place so an existing database keeps its data.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id INTEGER NOT NULL REFERENCES deals(id),
+    stripe_invoice_id TEXT NOT NULL UNIQUE,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'cad',
+    status TEXT NOT NULL,
+    paid_at TEXT NOT NULL
+  );
+`);
+{
+  const have = db.prepare('PRAGMA table_info(deals)').all().map((c) => c.name);
+  const add = {
+    payment_status: "TEXT NOT NULL DEFAULT 'none'", // none | link_created | link_sent | paid | past_due | cancelled
+    paid_at: 'TEXT',
+    stripe_customer_id: 'TEXT',
+    stripe_subscription_id: 'TEXT',
+    stripe_checkout_id: 'TEXT',
+    stripe_checkout_url: 'TEXT',
+    stripe_checkout_expires: 'INTEGER',
+  };
+  for (const [col, type] of Object.entries(add)) if (!have.includes(col)) db.exec(`ALTER TABLE deals ADD COLUMN ${col} ${type}`);
+}
+
 // Starter places: cities dealers are in, with nearby towns as aliases.
 const STARTER_PLACES = [
   ['Calgary', 'AB', 51.045, -114.057, 'Airdrie, Cochrane, Chestermere, Okotoks'],

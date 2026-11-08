@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Autobought</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <div class="card login" style="text-align:center">
+      <h1 id="t">You're all set</h1>
+      <p id="m" class="muted">Thanks for signing up with Autobought. Your dealer portal login is on its way to your inbox.</p>
+    </div>
+  </main>
+  <script>
+    // Where Stripe sends the dealer after paying (or backing out). Public: no sign-in.
+    const p = new URLSearchParams(location.search);
+    if (p.get('cancelled')) {
+      document.getElementById('t').textContent = 'Payment not completed';
+      document.getElementById('m').textContent = 'No charge was made. Use the same link to try again, or reply to your account manager and they will help.';
+    } else if (p.get('dealer')) {
+      document.getElementById('t').textContent = `Welcome aboard, ${p.get('dealer')}`;
+    }
+  </script>
+</body>
+</html>

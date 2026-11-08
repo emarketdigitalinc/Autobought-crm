@@ -45,6 +45,15 @@ router.post('/jotform', formParts, async (req, res) => {
   res.status(result.outcome === 'error' ? 202 : 200).json({ ok: true, outcome: result.outcome });
 });
 
+// Stripe: payment completed / invoices / cancellations.
+router.post('/stripe', async (req, res) => {
+  const stripe = require('../stripe');
+  if (!stripe.verifyWebhook(req.rawBody, req.get('stripe-signature'))) return res.status(400).json({ error: 'Bad signature.' });
+  const result = stripe.handleEvent(req.body || {});
+  res.json({ received: true, ...result });
+  if (result.handoff) await require('../deals').runHandoff(result.deal_id);
+});
+
 router.post('/lead', async (req, res) => {
   if (!config.webhookSecret()) return res.status(503).json({ error: 'WEBHOOK_SECRET is not set, so this door is closed.' });
   if ((req.get('x-webhook-secret') || req.query.secret) !== config.webhookSecret()) {

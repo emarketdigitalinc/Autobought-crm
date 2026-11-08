@@ -118,6 +118,18 @@ const ADS = [
       },
     }, actor);
   }
+  // Targets for this month, and payment states so the Overview has something to show.
+  const { setSetting } = require('../src/db');
+  setSetting(`targets:${day(0).slice(0, 7)}`, JSON.stringify({ ad_budget: 2500, dealer_leads: 30, max_cpl: 60, working: 8, signed: 4, new_mrr: 3000, mrr: 4000 }));
+  const deals = db.prepare('SELECT * FROM deals ORDER BY id').all();
+  deals.forEach((d, i) => {
+    if (i < 2) {
+      db.prepare("UPDATE deals SET payment_status = 'paid', paid_at = ? WHERE id = ?").run(ago(1440 * (10 - i * 3)), d.id);
+      db.prepare("INSERT INTO payments (deal_id, stripe_invoice_id, amount, currency, status, paid_at) VALUES (?, ?, ?, 'cad', 'paid', ?)").run(d.id, `in_demo_${d.id}`, d.monthly_value, ago(1440 * (10 - i * 3)));
+    } else {
+      db.prepare("UPDATE deals SET payment_status = 'link_sent' WHERE id = ?").run(d.id);
+    }
+  });
   console.log(`Demo ready: ${LEADS.length} leads, 3 signed dealers, 30 days of ad spend.`);
   console.log('Sign in as rory@autobought.ca / demo-password-1 (admin) or mike@autobought.ca / demo-password-1 (rep).');
   void rory;

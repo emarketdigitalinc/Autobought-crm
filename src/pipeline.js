@@ -4,6 +4,8 @@
 const { db, nowISO, logActivity, STAGES, STAGE_LABELS, LOST_REASONS, CONTACT_ACTIVITY } = require('./db');
 const capi = require('./capi');
 const deals = require('./deals');
+const stripe = require('./stripe');
+const config = require('./config');
 
 const getLead = (id) => db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
 
@@ -98,7 +100,18 @@ async function changeStage(leadId, { stage, lost_reason, note, deal: dealInput }
   if (stage === 'signed') {
     const d = deals.saveDeal(fresh, dealParts);
     logActivity(lead.id, 'system', `Signed: ${d.dealer_name}, ${d.leads_per_month} leads/month at $${d.price_per_lead}/lead ($${d.monthly_value}/month).`, actor && actor.id);
-    result.deal = await deals.runHandoff(d.id, actor && actor.id);
+    if (config.handoffAfterPayment()) {
+      // No portal login until they've paid: make the payment link now, hand off on payment.
+      deals.markAwaitingPayment(d.id);
+      try {
+        await stripe.paymentLink(deals.getDeal(d.id));
+      } catch (err) {
+        logActivity(lead.id, 'system', `Could not create the payment link: ${err.message}`, actor && actor.id);
+      }
+      result.deal = deals.getDeal(d.id);
+    } else {
+      result.deal = await deals.runHandoff(d.id, actor && actor.id);
+    }
   }
   result.lead = getLead(lead.id);
   return result;
