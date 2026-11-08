@@ -22,7 +22,21 @@ warn(!config.jotformSecret(), 'JOTFORM_WEBHOOK_SECRET is not set: the Jotform we
 warn(!config.twilioSid(), 'Twilio is not set: new-lead texts are simulated.');
 warn(!config.resendKey(), 'RESEND_API_KEY is not set: emails are simulated.');
 
-bootstrapAdmin().catch((err) => console.error('[bootstrap]', err.message));
+// A hosted demo seeds itself once, into an empty database only.
+async function maybeSeedDemo() {
+  if (process.env.SEED_DEMO !== 'true') return;
+  const { db } = require('./db');
+  if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0) return;
+  try {
+    await require('../scripts/demo').seedDemo({ password: process.env.DEMO_PASSWORD });
+  } catch (err) {
+    console.error('[demo]', err.message);
+  }
+}
+
+maybeSeedDemo()
+  .then(() => bootstrapAdmin())
+  .catch((err) => console.error('[bootstrap]', err.message));
 if (config.runScheduler()) startScheduler();
 
 const port = Number(process.env.PORT || 3100);

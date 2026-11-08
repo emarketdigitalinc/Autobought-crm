@@ -2,13 +2,15 @@
 // and ad spend, so the screens can be tried out. Refuses to touch a database
 // that already has leads. Every name, phone and email here is fictional.
 //
-// Logins it creates:  rory@autobought.ca / demo-password-1  (admin)
-//                     mike@autobought.ca / demo-password-1  (rep)
+// Logins it creates:  rory@autobought.ca and mike@autobought.ca, with the
+// password in DEMO_PASSWORD (default demo-password-1 for local use only).
+//
+// A hosted copy can seed itself on first boot: set SEED_DEMO=true and a
+// DEMO_PASSWORD of at least 10 characters (see server.js).
 
-process.env.RESEND_API_KEY = '';
-process.env.TWILIO_ACCOUNT_SID = '';
-process.env.LEADBANK_URL = '';
-process.env.META_DATASET_ID = '';
+// While seeding, nothing may leave the building: no texts, emails, lead bank,
+// Meta or Stripe calls, whatever keys are set. Restored afterwards.
+const QUIET = ['RESEND_API_KEY', 'TWILIO_ACCOUNT_SID', 'LEADBANK_URL', 'META_DATASET_ID', 'META_CAPI_TOKEN', 'STRIPE_SECRET_KEY'];
 
 const { db } = require('../src/db');
 const { createUser } = require('../src/auth');
@@ -44,13 +46,23 @@ const ADS = [
   ['ad4', 'Lander – RV & Marine', 'as2', 'Dealers – Landing page', 'WEBSITE', 9],
 ];
 
-(async () => {
-  if (db.prepare('SELECT COUNT(*) AS n FROM leads').get().n > 0) {
-    console.error('This database already has leads. The demo only fills an empty one.');
-    process.exit(1);
+async function seedDemo({ password = 'demo-password-1' } = {}) {
+  if (db.prepare('SELECT COUNT(*) AS n FROM leads').get().n > 0 || db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0) {
+    throw new Error('This database already has data. The demo only fills an empty one.');
   }
-  const rory = await createUser({ email: 'rory@autobought.ca', name: 'Rory', role: 'admin', password: 'demo-password-1', commission_rate: 0 });
-  const mike = await createUser({ email: 'mike@autobought.ca', name: 'Mike', password: 'demo-password-1', phone: '7805550100', commission_rate: 0.2, notify_new_leads: true });
+  if (String(password).length < 10) throw new Error('The demo password needs at least 10 characters.');
+  const saved = Object.fromEntries(QUIET.map((k) => [k, process.env[k]]));
+  for (const k of QUIET) delete process.env[k];
+  try {
+    await fill(password);
+  } finally {
+    for (const k of QUIET) if (saved[k] !== undefined) process.env[k] = saved[k];
+  }
+}
+
+async function fill(password) {
+  await createUser({ email: 'rory@autobought.ca', name: 'Rory', role: 'admin', password, commission_rate: 0 });
+  const mike = await createUser({ email: 'mike@autobought.ca', name: 'Mike', password, phone: '7805550100', commission_rate: 0.2, notify_new_leads: true });
 
   for (const [id, name, adsetId, adsetName, dest] of ADS) {
     db.prepare('INSERT INTO ads (ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name, destination_type, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -130,7 +142,12 @@ const ADS = [
       db.prepare("UPDATE deals SET payment_status = 'link_sent' WHERE id = ?").run(d.id);
     }
   });
-  console.log(`Demo ready: ${LEADS.length} leads, 3 signed dealers, 30 days of ad spend.`);
-  console.log('Sign in as rory@autobought.ca / demo-password-1 (admin) or mike@autobought.ca / demo-password-1 (rep).');
-  void rory;
-})().catch((e) => { console.error(e); process.exit(1); });
+  console.log(`Demo ready: ${LEADS.length} leads, 3 signed dealers, 30 days of ad spend. Logins: rory@autobought.ca (admin), mike@autobought.ca (rep).`);
+}
+
+module.exports = { seedDemo };
+
+if (require.main === module) {
+  seedDemo({ password: process.env.DEMO_PASSWORD || 'demo-password-1' })
+    .catch((e) => { console.error(e.message); process.exit(1); });
+}
