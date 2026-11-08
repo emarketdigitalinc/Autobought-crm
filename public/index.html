@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Leads · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <div class="pagehead">
+      <div>
+        <h1>Dealer leads</h1>
+        <div class="muted small" id="speed"></div>
+      </div>
+      <div class="row" style="gap:8px">
+        <select id="source" aria-label="Source">
+          <option value="">A + B</option>
+          <option value="A">A · Instant Form</option>
+          <option value="B">B · Landing page</option>
+        </select>
+        <input id="q" type="search" placeholder="Search name, dealership, phone, city" style="width:260px" />
+      </div>
+    </div>
+    <div class="tabs" id="tabs" style="margin-bottom:14px"></div>
+    <div class="tablewrap cards-on-mobile">
+      <table>
+        <thead>
+          <tr>
+            <th>Lead</th><th>Dealership</th><th>Market</th><th>Sells</th><th>Src</th>
+            <th>Stage</th><th>Came in</th><th class="num">To 1st contact</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const { api, esc, fmtMinutes, fmtWhen, stageBadge, availBadge, cats, tel } = CRM;
+    let stage = sessionStorageGet('stage') || '';
+    function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+    function sessionStorageSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+
+    async function load() {
+      const p = new URLSearchParams();
+      if (stage) p.set('stage', stage);
+      if (source.value) p.set('source', source.value);
+      if (q.value.trim()) p.set('q', q.value.trim());
+      const data = await api(`/leads?${p}`);
+
+      const tabs = [['', 'All', data.total], ...CRM.meta.stages.map((s) => [s.key, s.label, data.counts[s.key]])];
+      document.getElementById('tabs').innerHTML = tabs.map(([k, l, n]) =>
+        `<button data-k="${k}" class="${k === stage ? 'on' : ''}">${l} <span class="count">${n}</span></button>`).join('');
+      document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { stage = b.dataset.k; sessionStorageSet('stage', stage); load(); });
+
+      document.getElementById('speed').textContent = data.average_minutes_to_first_contact === null
+        ? 'No first contacts logged yet.'
+        : `Average time to first contact: ${fmtMinutes(data.average_minutes_to_first_contact)} (over ${data.contacted_count} leads)`;
+
+      const rows = document.getElementById('rows');
+      if (!data.leads.length) { rows.innerHTML = '<tr><td colspan="9" class="muted">No leads here.</td></tr>'; return; }
+      rows.innerHTML = data.leads.map((l) => {
+        const waiting = !l.first_contact_at && l.stage === 'new';
+        const waitMins = waiting ? Math.round((Date.now() - new Date(l.created_at)) / 60000) : null;
+        const t = tel(l.phone);
+        return `<tr class="click" data-id="${esc(l.id)}">
+          <td class="first"><strong>${esc(l.name || 'No name')}</strong>${l.submissions > 1 ? ` <span class="badge" title="Submitted ${l.submissions} times">×${l.submissions}</span>` : ''}<div class="small muted">${esc(l.role || '')}</div></td>
+          <td>${esc(l.dealership || '—')}<div class="small muted">${esc(l.city || '')}</div></td>
+          <td>${availBadge(l.availability)}<div class="small muted">${esc(l.market_name || '')}</div></td>
+          <td class="small">${esc(cats(l.categories) || '—')}${l.leads_wanted ? `<div class="muted">${esc(l.leads_wanted)}/mo</div>` : ''}</td>
+          <td><span class="badge src" title="${l.source === 'A' ? 'Instant Form' : 'Landing page'}">${esc(l.source)}</span></td>
+          <td>${stageBadge(l.stage)}${l.lost_reason ? `<div class="small muted">${esc(l.lost_reason)}</div>` : ''}</td>
+          <td class="small nowrap">${fmtWhen(l.created_at)}</td>
+          <td class="num small nowrap">${waiting ? `<span class="badge ${waitMins > 5 ? 'lost' : 'working'}">waiting ${fmtMinutes(waitMins)}</span>` : fmtMinutes(l.minutes_to_first_contact)}</td>
+          <td>${t ? `<a class="btn good" href="tel:${esc(t)}" data-call="${esc(l.id)}" title="Call ${esc(l.phone)}">Call</a>` : ''}</td>
+        </tr>`;
+      }).join('');
+      rows.querySelectorAll('tr.click').forEach((tr) => tr.onclick = (e) => {
+        if (e.target.closest('a')) return;
+        location.href = `/lead.html?id=${encodeURIComponent(tr.dataset.id)}`;
+      });
+      // Tapping Call logs the call, which starts the speed-to-lead clock.
+      rows.querySelectorAll('a[data-call]').forEach((a) => a.onclick = () => {
+        api(`/leads/${encodeURIComponent(a.dataset.call)}/activities`, { method: 'POST', body: { type: 'call', body: 'Tapped call from the leads list' } }).catch(() => {});
+      });
+    }
+
+    let t;
+    q.oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
+    source.onchange = load;
+    CRM.header('index').then(load).catch((e) => CRM.toast(e.message, true));
+    setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 60000);
+  </script>
+</body>
+</html>

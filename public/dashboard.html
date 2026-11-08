@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <div class="pagehead">
+      <div><h1>Ad cost dashboard</h1><div class="muted small" id="syncInfo"></div></div>
+      <div class="row" style="gap:8px;align-items:flex-end">
+        <div class="tabs" id="presets">
+          <button data-d="7">7 days</button><button data-d="30">30 days</button><button data-d="90">90 days</button><button data-d="month">This month</button>
+        </div>
+        <div><label for="from">From</label><input type="date" id="from" /></div>
+        <div><label for="to">To</label><input type="date" id="to" /></div>
+        <button id="syncBtn">Sync spend</button>
+      </div>
+    </div>
+    <div id="health"></div>
+
+    <div class="row" id="tiles" style="margin-bottom:16px"></div>
+
+    <div class="card">
+      <h2>A vs B</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Source</th><th class="num">Spend</th><th class="num">Leads</th><th class="num">Working</th><th class="num">Signed</th><th class="num">Cost / lead</th><th class="num">Cost / Working</th><th class="num">Cost / Signed</th></tr></thead>
+        <tbody id="sources"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>By ad</h2>
+      <p class="small muted">Source comes from the ad set (Instant Form = A, website = B). Change it if Meta has it wrong.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Ad</th><th>Campaign › Ad set</th><th>Src</th><th class="num">Spend</th><th class="num">Leads</th><th class="num">Working</th><th class="num">Signed</th><th class="num">CPL</th><th class="num">Cost / Working</th><th class="num">Cost / Signed</th></tr></thead>
+        <tbody id="ads"></tbody>
+      </table></div>
+    </div>
+
+    <div class="pagehead" style="margin-top:28px">
+      <div><h1>Revenue &amp; commission</h1></div>
+      <div><label for="month">Month</label><input type="month" id="month" /></div>
+    </div>
+    <div class="row" id="revTiles" style="margin-bottom:16px"></div>
+    <div class="row">
+      <div class="card grow" style="flex:1 1 320px">
+        <h2>By account manager</h2>
+        <table><thead><tr><th>Account manager</th><th class="num">Deals</th><th class="num">Revenue</th><th class="num">Commission</th></tr></thead><tbody id="byAm"></tbody></table>
+      </div>
+      <div class="card grow" style="flex:1 1 320px">
+        <h2>Last 12 months</h2>
+        <table><thead><tr><th>Month</th><th class="num">Dealers</th><th class="num">Revenue</th><th class="num">Commission</th></tr></thead><tbody id="trend"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Signed dealers billing this month</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Dealer</th><th>Status</th><th>Package</th><th class="num">Leads/mo</th><th class="num">$/lead</th><th class="num">Monthly value</th><th>Start</th><th>Account manager</th><th class="num">Commission</th></tr></thead>
+        <tbody id="dealRows"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Team</h2>
+      <p class="small muted">Who gets a text + email the moment a lead arrives, and each account manager's default commission (used when a deal is signed; each deal keeps its own rate).</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Name</th><th>Email</th><th>Mobile (for texts)</th><th>Text me new leads</th><th class="num">Commission %</th><th></th></tr></thead>
+        <tbody id="team"></tbody>
+      </table></div>
+      <details style="margin-top:12px" id="addUserBox" hidden>
+        <summary class="small"><strong>Add a team member</strong></summary>
+        <form id="addUser" class="fields" style="margin-top:10px">
+          <div class="field"><label>Name</label><input name="name" required /></div>
+          <div class="field"><label>Email</label><input name="email" type="email" required /></div>
+          <div class="field"><label>Mobile</label><input name="phone" /></div>
+          <div class="field"><label>Commission %</label><input name="commission" type="number" min="0" max="100" step="0.5" value="20" /></div>
+          <div class="field"><label>Temporary password</label><input name="password" minlength="10" required /></div>
+          <div class="field"><label>&nbsp;</label><label style="font-weight:500;color:var(--ink)"><input type="checkbox" name="notify" checked /> Text me new leads</label></div>
+          <div class="field"><label>&nbsp;</label><button class="primary">Add</button></div>
+        </form>
+      </details>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    const { api, esc, toast, money, pct, fmtMinutes } = CRM;
+    const day = (d) => d.toISOString().slice(0, 10);
+    function setRange(p) {
+      const now = new Date();
+      to.value = day(now);
+      if (p === 'month') from.value = `${day(now).slice(0, 7)}-01`;
+      else from.value = day(new Date(Date.now() - (Number(p) - 1) * 86400000));
+      document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', b.dataset.d === String(p)));
+    }
+    const cost = (v) => (v === null ? '<span class="muted">—</span>' : money(v));
+
+    async function loadAds() {
+      const d = await api(`/dashboard?from=${from.value}&to=${to.value}`);
+      const s = d.last_sync;
+      syncInfo.textContent = s ? `Spend last synced ${new Date(s.at).toLocaleString()} (${s.since} to ${s.until}).` : 'Spend has not been synced yet.';
+      const h = d.health;
+      health.innerHTML = [
+        !h.meta_configured && '<div class="notice warn">Meta Marketing API is not connected (META_AD_ACCOUNT_ID / META_ADS_TOKEN), so spend is empty.</div>',
+        !h.capi_configured && '<div class="notice warn">Conversions API is not connected (META_DATASET_ID / META_CAPI_TOKEN): Working and Signed are not being sent to Meta.</div>',
+        h.inbox_failed && `<div class="notice bad">${h.inbox_failed} incoming lead(s) could not be processed after several tries. Check the server log.</div>`,
+        h.capi_failed && `<div class="notice warn">${h.capi_failed} Conversions API event(s) waiting to retry.</div>`,
+      ].filter(Boolean).join('');
+
+      const all = d.sources.find((x) => x.source === 'All');
+      const tile = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+      tiles.innerHTML = [
+        tile('Spend', money(all.spend, 0)),
+        tile('Leads', all.leads, `${cost(all.cost_per_lead)} each`),
+        tile('Working', all.working, `${cost(all.cost_per_working)} each`),
+        tile('Signed', all.signed, `${cost(all.cost_per_signed)} each`),
+        tile('Avg to first contact', fmtMinutes(d.speed.average_minutes), `${d.speed.within_5} of ${d.speed.contacted} within 5 min${d.speed.waiting ? ` · ${d.speed.waiting} waiting` : ''}`),
+        tile('Shoppers routed', h.shoppers_routed, 'sent to the consumer funnel'),
+      ].join('');
+
+      const label = { A: 'A · Instant Form', B: 'B · Landing page', '?': 'Unclassified', All: 'Total' };
+      sources.innerHTML = d.sources.map((r) => `<tr${r.source === 'All' ? ' style="font-weight:700"' : ''}>
+        <td>${label[r.source]}</td><td class="num">${money(r.spend)}</td><td class="num">${r.leads}</td><td class="num">${r.working}</td><td class="num">${r.signed}</td>
+        <td class="num">${cost(r.cost_per_lead)}</td><td class="num">${cost(r.cost_per_working)}</td><td class="num">${cost(r.cost_per_signed)}</td></tr>`).join('');
+
+      ads.innerHTML = d.ads.length ? d.ads.map((r) => `<tr>
+        <td>${esc(r.ad_name || r.ad_id || '—')}</td>
+        <td class="small">${esc([r.campaign_name, r.adset_name].filter(Boolean).join(' › ') || '—')}</td>
+        <td>${r.ad_id ? `<select data-ad="${esc(r.ad_id)}" title="${r.source_override ? 'Set by hand' : 'From Meta'}">
+            ${['A', 'B'].map((x) => `<option ${r.source === x ? 'selected' : ''}>${x}</option>`).join('')}${r.source === '?' ? '<option selected>?</option>' : ''}
+          </select>` : `<span class="badge src">${esc(r.source)}</span>`}</td>
+        <td class="num">${money(r.spend)}</td><td class="num">${r.leads}</td><td class="num">${r.working}</td><td class="num">${r.signed}</td>
+        <td class="num">${cost(r.cost_per_lead)}</td><td class="num">${cost(r.cost_per_working)}</td><td class="num">${cost(r.cost_per_signed)}</td></tr>`).join('')
+        : '<tr><td colspan="10" class="muted">No spend or leads in this range.</td></tr>';
+      ads.querySelectorAll('select[data-ad]').forEach((sel) => sel.onchange = async () => {
+        await api(`/ads/${encodeURIComponent(sel.dataset.ad)}/source`, { method: 'POST', body: { source: sel.value } });
+        loadAds();
+      });
+    }
+
+    async function loadRevenue() {
+      const r = await api(`/revenue?month=${month.value}`);
+      const tile = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+      revTiles.innerHTML = tile('Dealers billing', r.totals.deals) + tile('Monthly revenue', money(r.totals.revenue, 0)) + tile('Commission', money(r.totals.commission, 0));
+      byAm.innerHTML = r.by_manager.map((m) => `<tr><td>${esc(m.account_manager)}</td><td class="num">${m.deals}</td><td class="num">${money(m.revenue)}</td><td class="num">${money(m.commission)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No signed dealers billing.</td></tr>';
+      trend.innerHTML = r.trend.slice().reverse().map((t) => `<tr><td>${t.month}</td><td class="num">${t.deals}</td><td class="num">${money(t.revenue, 0)}</td><td class="num">${money(t.commission, 0)}</td></tr>`).join('');
+      dealRows.innerHTML = r.rows.map((x) => `<tr>
+        <td><a href="/lead.html?id=${encodeURIComponent(x.lead_id)}">${esc(x.dealer_name)}</a></td><td>${esc(x.status)}</td><td>${esc(x.package)}</td>
+        <td class="num">${x.leads_per_month}</td><td class="num">${money(x.price_per_lead)}</td><td class="num">${money(x.monthly_value)}</td>
+        <td>${esc(x.start_date)}</td><td>${esc(x.account_manager)} <span class="muted small">${pct(x.commission_rate)}</span></td><td class="num">${money(x.commission)}</td></tr>`).join('')
+        || '<tr><td colspan="9" class="muted">Nobody billing this month.</td></tr>';
+    }
+
+    async function loadTeam() {
+      const { users } = await api('/users');
+      const admin = CRM.meta.me.role === 'admin';
+      addUserBox.hidden = !admin;
+      team.innerHTML = users.map((u) => `<tr data-id="${u.id}">
+        <td>${esc(u.name)}${u.role === 'admin' ? ' <span class="badge">admin</span>' : ''}${u.active ? '' : ' <span class="badge lost">off</span>'}</td>
+        <td class="small">${esc(u.email)}</td>
+        <td><input data-f="phone" value="${esc(u.phone || '')}" placeholder="780 555 0142" style="width:150px" /></td>
+        <td><input type="checkbox" data-f="notify_new_leads" ${u.notify_new_leads ? 'checked' : ''} /></td>
+        <td class="num"><input data-f="commission" type="number" min="0" max="100" step="0.5" value="${Math.round(u.commission_rate * 1000) / 10}" style="width:80px" ${admin ? '' : 'disabled'} /></td>
+        <td><button data-save>Save</button></td></tr>`).join('');
+      team.querySelectorAll('button[data-save]').forEach((b) => b.onclick = async () => {
+        const tr = b.closest('tr');
+        const body = {
+          phone: tr.querySelector('[data-f=phone]').value,
+          notify_new_leads: tr.querySelector('[data-f=notify_new_leads]').checked,
+        };
+        if (admin) body.commission_rate = Number(tr.querySelector('[data-f=commission]').value) / 100;
+        try { await api(`/users/${tr.dataset.id}`, { method: 'PATCH', body }); toast('Saved'); } catch (e) { toast(e.message, true); }
+      });
+    }
+    addUser.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(addUser);
+      try {
+        await api('/users', { method: 'POST', body: { name: f.get('name'), email: f.get('email'), phone: f.get('phone'), commission_rate: Number(f.get('commission')) / 100, password: f.get('password'), notify_new_leads: f.get('notify') === 'on' } });
+        addUser.reset(); toast('Added'); loadTeam();
+      } catch (err) { toast(err.message, true); }
+    };
+
+    document.querySelectorAll('#presets button').forEach((b) => b.onclick = () => { setRange(b.dataset.d); loadAds(); });
+    from.onchange = to.onchange = () => { document.querySelectorAll('#presets button').forEach((b) => b.classList.remove('on')); loadAds(); };
+    month.onchange = loadRevenue;
+    syncBtn.onclick = async () => {
+      syncBtn.disabled = true;
+      try { const r = await api('/ads/sync', { method: 'POST', body: { since: from.value, until: to.value } }); toast(`Synced ${r.rows} day-rows from Meta`); } catch (e) { toast(e.message, true); }
+      syncBtn.disabled = false; loadAds();
+    };
+
+    setRange(30);
+    month.value = new Date().toISOString().slice(0, 7);
+    CRM.header('dashboard').then(() => Promise.all([loadAds(), loadRevenue(), loadTeam()])).catch((e) => toast(e.message, true));
+  </script>
+</body>
+</html>

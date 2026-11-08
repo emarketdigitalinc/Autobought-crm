@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lead · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <p class="small"><a href="/index.html">← All leads</a></p>
+    <div class="pagehead">
+      <div>
+        <h1 id="title">Loading…</h1>
+        <div class="muted" id="subtitle"></div>
+      </div>
+      <div id="stagebadge"></div>
+    </div>
+
+    <div class="row">
+      <div class="grow" style="flex:1 1 380px">
+        <div class="card">
+          <div id="callbox"></div>
+          <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+            <h2 style="margin:0">Details</h2>
+            <button id="editBtn">Edit</button>
+          </div>
+          <dl class="kv" id="details"></dl>
+        </div>
+
+        <div class="card">
+          <h2>Market availability</h2>
+          <div id="avail"></div>
+        </div>
+
+        <div class="card" id="dealCard" hidden>
+          <h2>Deal</h2>
+          <div id="deal"></div>
+        </div>
+
+        <div class="card">
+          <h2>Where it came from</h2>
+          <dl class="kv" id="attr"></dl>
+          <div id="capi" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="grow" style="flex:1 1 420px">
+        <div class="card">
+          <h2>Stage</h2>
+          <div class="tabs" id="stages"></div>
+          <p class="small muted" id="stageNote" style="margin:10px 0 0"></p>
+        </div>
+
+        <div class="card">
+          <h2>Log activity</h2>
+          <textarea id="actBody" placeholder="What happened? (optional for a call, text or email)"></textarea>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <button data-act="call">Called</button>
+            <button data-act="text">Texted</button>
+            <button data-act="email">Emailed</button>
+            <button data-act="note" class="primary">Add note</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Activity</h2>
+          <ul class="timeline" id="timeline"></ul>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <dialog id="lostDlg">
+    <form method="dialog" id="lostForm">
+      <h2>Why was it lost?</h2>
+      <div class="field"><label for="lostReason">Reason</label><select id="lostReason" required></select></div>
+      <div class="field"><label for="lostNote">Note</label><textarea id="lostNote" placeholder="Required for Other"></textarea></div>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Mark lost</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="signDlg">
+    <form method="dialog" id="signForm">
+      <h2>Sign this dealer</h2>
+      <p class="small muted">Creates their portal login, sets their categories, markets and quota in the lead bank, and sends the welcome email.</p>
+      <div id="signErr"></div>
+      <div class="fields">
+        <div class="field"><label>Dealer name</label><input id="sDealer" required /></div>
+        <div class="field"><label>Portal login email</label><input id="sEmail" type="email" required /></div>
+        <div class="field"><label>Package</label><select id="sPackage"></select></div>
+        <div class="field"><label>Price per lead ($)</label><input id="sPrice" type="number" min="0" step="0.01" required /></div>
+        <div class="field"><label>Start date</label><input id="sStart" type="date" required /></div>
+        <div class="field"><label>Account manager</label><select id="sAm"></select></div>
+        <div class="field"><label>Commission (%)</label><input id="sRate" type="number" min="0" max="100" step="0.5" /></div>
+        <div class="field"><label>Lead bank sharing</label><select id="sMode"><option value="shared">Shared</option><option value="exclusive">Exclusive</option></select></div>
+      </div>
+      <h3>Monthly lead quota by category</h3>
+      <div class="fields" id="sQuotas"></div>
+      <h3>Markets</h3>
+      <div id="sMarkets" style="max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px"></div>
+      <p id="sValue" class="small"></p>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="good" value="ok">Sign &amp; hand off</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="editDlg">
+    <form method="dialog" id="editForm">
+      <h2>Edit lead</h2>
+      <div class="fields" id="editFields"></div>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+  <script>
+    const { api, esc, toast, fmtMinutes, fmtWhen, money, pct, stageBadge, cats, tel, CAT } = CRM;
+    const id = CRM.qs('id');
+    let data;
+
+    const ICON = { call: '📞', text: '💬', email: '✉️', note: '📝', stage: '➜', submission: '📥', notify: '🔔', capi: '📈', handoff: '🔑', system: '•' };
+
+    async function load() {
+      data = await api(`/leads/${encodeURIComponent(id)}`);
+      const l = data.lead;
+      document.title = `${l.name || 'Lead'} · Autobought CRM`;
+      document.getElementById('title').textContent = l.name || 'No name';
+      document.getElementById('subtitle').textContent = [l.dealership, l.city].filter(Boolean).join(' · ');
+      document.getElementById('stagebadge').innerHTML = stageBadge(l.stage) + (l.lost_reason ? ` <span class="muted small">${esc(l.lost_reason)}</span>` : '');
+
+      const t = tel(l.phone);
+      const waiting = !l.first_contact_at;
+      document.getElementById('callbox').innerHTML = (t ? `<a class="call" id="callLink" href="tel:${esc(t)}">📞 Call ${esc(l.phone)}</a>` : '<div class="notice warn">No phone number on this lead.</div>')
+        + `<p class="small ${waiting ? '' : 'muted'}" style="margin:0 0 14px">${waiting
+          ? `<strong>Not contacted yet</strong>: came in ${fmtWhen(l.created_at)} (${fmtMinutes(Math.round((Date.now() - new Date(l.created_at)) / 60000))} ago).`
+          : `First contact ${fmtMinutes(l.minutes_to_first_contact)} after it came in.`}</p>`;
+      const cl = document.getElementById('callLink');
+      if (cl) cl.onclick = () => { api(`/leads/${encodeURIComponent(id)}/activities`, { method: 'POST', body: { type: 'call', body: 'Tapped call' } }).then(load).catch(() => {}); };
+
+      const kv = (rows) => rows.filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+      document.getElementById('details').innerHTML = kv([
+        ['Phone', esc(l.phone)], ['Work email', l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''],
+        ['Dealership', esc(l.dealership)], ['City', esc([l.city, l.province].filter(Boolean).join(', '))], ['Role', esc(l.role)],
+        ['Sells', esc(l.sells)], ['Categories', esc(cats(l.categories))], ['Leads/month', esc(l.leads_wanted)],
+        ['Website', l.website ? `<a href="${esc(/^https?:/.test(l.website) ? l.website : `https://${l.website}`)}" target="_blank" rel="noopener">${esc(l.website)}</a>` : ''],
+        ['Message', esc(l.message)], ['Owner', esc(l.owner_name)], ['Submitted', `${l.submissions}×`],
+      ]);
+
+      document.getElementById('attr').innerHTML = kv([
+        ['Source', `<span class="badge src">${esc(l.source)}</span> ${l.source === 'A' ? 'Meta Instant Form' : 'autobought.ca/dealers'}`],
+        ['Campaign', esc(l.campaign_name || l.campaign_id)], ['Ad set', esc(l.adset_name || l.adset_id)], ['Ad', esc(l.ad_name || l.ad_id)],
+        ['UTM source', esc(l.utm_source)], ['UTM medium', esc(l.utm_medium)], ['UTM campaign', esc(l.utm_campaign)],
+        ['UTM content', esc(l.utm_content)], ['UTM term', esc(l.utm_term)], ['Meta lead ID', esc(l.meta_lead_id)],
+        ['Created', esc(new Date(l.created_at).toLocaleString())],
+      ]);
+      document.getElementById('capi').innerHTML = data.capi.length
+        ? `<h3>Sent back to Meta</h3>${data.capi.map((c) => `<div class="small">${esc(c.event_name)}: <span class="badge ${c.status === 'sent' ? 'signed' : c.status === 'skipped' ? 'unknown' : 'lost'}">${esc(c.status)}</span> ${c.last_error ? `<span class="muted">${esc(c.last_error)}</span>` : ''}</div>`).join('')}`
+        : '';
+
+      renderAvailability();
+      renderDeal();
+      renderStages();
+      document.getElementById('timeline').innerHTML = data.activities.map((a) => `
+        <li><div class="${a.type === 'stage' ? 't-stage' : ''}">${ICON[a.type] || '•'} ${esc(a.body)}</div>
+        <div class="meta">${fmtWhen(a.created_at)}${a.actor_name ? ` · ${esc(a.actor_name)}` : ''}</div></li>`).join('') || '<li class="muted">Nothing yet.</li>';
+    }
+
+    function renderAvailability() {
+      const a = data.availability;
+      const options = CRM.meta.markets.map((m) => `<option value="${m.id}" ${a.market && a.market.id === m.id ? 'selected' : ''}>${esc(m.name)}, ${esc(m.province)}</option>`).join('');
+      document.getElementById('avail').innerHTML = `
+        <div class="field"><label>Market</label>
+          <select id="marketSel"><option value="">${a.market ? '' : 'No market matched — pick one'}</option>${options}</select>
+        </div>
+        <div class="avail">${a.categories.map((c) => `
+          <div class="cell ${c.status}"><div class="lbl">${esc(c.label)}</div>
+          ${c.status === 'open' ? '<strong>Open</strong>' : c.status === 'taken' ? `<strong>Taken</strong><div class="small">by <a href="/lead.html?id=${encodeURIComponent(c.deal_lead_id)}">${esc(c.dealer)}</a></div>` : '<span class="muted">Pick a market</span>'}
+          </div>`).join('')}</div>
+        ${!String(data.lead.categories || '') ? '<p class="small muted">We could not tell what they sell, so all three are shown.</p>' : ''}`;
+      document.getElementById('marketSel').onchange = async (e) => {
+        await api(`/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body: { market_id: e.target.value || null } });
+        load();
+      };
+    }
+
+    function renderDeal() {
+      const d = data.deal;
+      const card = document.getElementById('dealCard');
+      card.hidden = !d;
+      if (!d) return;
+      const handoff = {
+        done: '<div class="notice ok">Handed off: portal login created, contracts set, welcome email sent.</div>',
+        failed: `<div class="notice bad">Handoff stopped: ${esc(d.handoff_error)}</div>`,
+        skipped: `<div class="notice warn">${esc(d.handoff_error)}</div>`,
+        pending: '<div class="notice warn">Handoff not finished.</div>',
+      }[d.handoff_status];
+      document.getElementById('deal').innerHTML = `${handoff}
+        ${d.handoff_status !== 'done' ? '<p><button id="retryHandoff" class="primary">Retry handoff</button></p>' : ''}
+        <dl class="kv">
+          <dt>Status</dt><dd><select id="dStatus">${CRM.meta.deal_statuses.map((s) => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></dd>
+          <dt>Package</dt><dd>${esc(d.package === 'application' ? 'Application' : 'Essential')}, ${d.leads_per_month} leads/month</dd>
+          <dt>Quotas</dt><dd>${d.quotas.map((q) => `${esc(CAT[q.category])} ${q.monthly_quota}`).join(' · ')}</dd>
+          <dt>Markets</dt><dd>${d.markets.map((m) => esc(m.name)).join(', ')}</dd>
+          <dt>Price per lead</dt><dd>${money(d.price_per_lead)}</dd>
+          <dt>Monthly value</dt><dd>${money(d.monthly_value)}</dd>
+          <dt>Start date</dt><dd>${esc(d.start_date)}${d.end_date ? ` → ${esc(d.end_date)}` : ''}</dd>
+          <dt>Account manager</dt><dd>${esc(d.account_manager_name || '—')} (${pct(d.commission_rate)} = ${money(d.monthly_value * d.commission_rate)}/mo)</dd>
+          <dt>Portal login</dt><dd>${esc(d.portal_email)}</dd>
+        </dl>
+        <p class="small"><button id="dEdit">Edit price / commission</button></p>`;
+      const r = document.getElementById('retryHandoff');
+      if (r) r.onclick = async () => { r.disabled = true; try { await api(`/leads/${encodeURIComponent(id)}/handoff`, { method: 'POST' }); } catch (e) { toast(e.message, true); } load(); };
+      document.getElementById('dStatus').onchange = async (e) => {
+        try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { status: e.target.value } }); toast('Deal updated'); } catch (err) { toast(err.message, true); }
+        load();
+      };
+      document.getElementById('dEdit').onclick = async () => {
+        const price = prompt('Price per lead ($)', d.price_per_lead);
+        if (price === null) return;
+        const rate = prompt('Commission (%)', Math.round(d.commission_rate * 1000) / 10);
+        if (rate === null) return;
+        try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { price_per_lead: Number(price), commission_rate: Number(rate) / 100 } }); toast('Deal updated'); } catch (err) { toast(err.message, true); }
+        load();
+      };
+    }
+
+    function renderStages() {
+      const cur = data.lead.stage;
+      document.getElementById('stages').innerHTML = CRM.meta.stages.map((s) =>
+        `<button data-s="${s.key}" class="${s.key === cur ? 'on' : ''}">${s.label}</button>`).join('');
+      document.querySelectorAll('#stages button').forEach((b) => b.onclick = () => moveTo(b.dataset.s));
+      document.getElementById('stageNote').textContent = data.lead.stage_changed_at ? `In ${CRM.STAGE[cur]} since ${fmtWhen(data.lead.stage_changed_at)}.` : '';
+    }
+
+    async function moveTo(stage) {
+      if (stage === data.lead.stage && stage !== 'signed') return;
+      if (stage === 'lost') return openLost();
+      if (stage === 'signed') return openSign();
+      if (data.lead.stage === 'signed' && !confirm('Leaving Signed cancels the deal. Continue?')) return;
+      try { await api(`/leads/${encodeURIComponent(id)}/stage`, { method: 'POST', body: { stage } }); toast(`Moved to ${CRM.STAGE[stage]}`); } catch (e) { toast(e.message, true); }
+      load();
+    }
+
+    function openLost() {
+      lostReason.innerHTML = CRM.meta.lost_reasons.map((r) => `<option>${esc(r)}</option>`).join('');
+      lostNote.value = '';
+      lostDlg.showModal();
+    }
+    lostDlg.addEventListener('close', async () => {
+      if (lostDlg.returnValue !== 'ok') return;
+      try { await api(`/leads/${encodeURIComponent(id)}/stage`, { method: 'POST', body: { stage: 'lost', lost_reason: lostReason.value, note: lostNote.value } }); toast('Marked lost'); } catch (e) { toast(e.message, true); }
+      load();
+    });
+
+    function openSign() {
+      const l = data.lead;
+      const d = data.deal;
+      signErr.innerHTML = '';
+      sDealer.value = (d && d.dealer_name) || l.dealership || '';
+      sEmail.value = (d && d.portal_email) || l.email || '';
+      sPackage.innerHTML = CRM.meta.packages.map((p) => `<option value="${p.key}" ${d && d.package === p.key ? 'selected' : ''}>${p.label}</option>`).join('');
+      sPrice.value = d ? d.price_per_lead : '';
+      sStart.value = (d && d.start_date) || new Date().toISOString().slice(0, 10);
+      sAm.innerHTML = CRM.meta.users.map((u) => `<option value="${u.id}" data-rate="${u.commission_rate}" ${(d ? d.account_manager_id : l.owner_id) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
+      const setRate = () => { const o = sAm.selectedOptions[0]; sRate.value = o ? Math.round(Number(o.dataset.rate) * 1000) / 10 : 0; };
+      if (d) sRate.value = Math.round(d.commission_rate * 1000) / 10; else setRate();
+      sAm.onchange = setRate;
+      const sells = String(l.categories || '').split(',').filter(Boolean);
+      const want = Number(l.leads_wanted_n) || '';
+      sQuotas.innerHTML = CRM.meta.categories.map((c) => {
+        const existing = d && d.quotas.find((q) => q.category === c.key);
+        const val = existing ? existing.monthly_quota : sells.length === 1 && sells[0] === c.key ? want : '';
+        return `<div class="field"><label>${esc(c.label)}</label><input type="number" min="0" data-cat="${c.key}" value="${val}" placeholder="0" /></div>`;
+      }).join('');
+      const chosen = new Set(d ? d.markets.map((m) => m.id) : data.availability.market ? [data.availability.market.id] : []);
+      sMarkets.innerHTML = CRM.meta.markets.map((m) => `<label style="font-weight:500;color:var(--ink)"><input type="checkbox" value="${m.id}" ${chosen.has(m.id) ? 'checked' : ''}/> ${esc(m.name)}, ${esc(m.province)}</label>`).join('');
+      const preview = () => {
+        const n = [...sQuotas.querySelectorAll('input')].reduce((a, i) => a + (Number(i.value) || 0), 0);
+        const v = n * (Number(sPrice.value) || 0);
+        sValue.textContent = `${n} leads/month × ${money(Number(sPrice.value) || 0)} = ${money(v)}/month · commission ${money(v * (Number(sRate.value) || 0) / 100)}/month`;
+      };
+      signForm.oninput = preview;
+      preview();
+      signDlg.showModal();
+    }
+    signForm.addEventListener('submit', async (e) => {
+      if (e.submitter && e.submitter.value !== 'ok') return;
+      e.preventDefault();
+      const quotas = {};
+      sQuotas.querySelectorAll('input').forEach((i) => { if (Number(i.value) > 0) quotas[i.dataset.cat] = Number(i.value); });
+      const body = {
+        stage: 'signed',
+        deal: {
+          dealer_name: sDealer.value, portal_email: sEmail.value, package: sPackage.value, price_per_lead: sPrice.value,
+          start_date: sStart.value, account_manager_id: sAm.value, commission_rate: (Number(sRate.value) || 0) / 100,
+          distribution_mode: sMode.value, quotas, market_ids: [...sMarkets.querySelectorAll('input:checked')].map((i) => Number(i.value)),
+        },
+      };
+      const btn = e.submitter; if (btn) btn.disabled = true;
+      try {
+        const r = await api(`/leads/${encodeURIComponent(id)}/stage`, { method: 'POST', body });
+        signDlg.close();
+        toast(r.deal && r.deal.handoff_status === 'done' ? 'Signed and handed off to the portal' : 'Signed. Check the handoff on the deal panel.', r.deal && r.deal.handoff_status === 'failed');
+        load();
+      } catch (err) {
+        signErr.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`;
+      } finally { if (btn) btn.disabled = false; }
+    });
+
+    const EDIT = [['name', 'Name'], ['phone', 'Phone'], ['email', 'Work email'], ['dealership', 'Dealership'], ['city', 'City'], ['province', 'Province'], ['role', 'Role'], ['sells', 'What they sell'], ['leads_wanted', 'Leads/month wanted'], ['website', 'Website']];
+    editBtn.onclick = () => {
+      const l = data.lead;
+      const sells = String(l.categories || '').split(',');
+      editFields.innerHTML = EDIT.map(([k, label]) => `<div class="field"><label>${label}</label><input data-k="${k}" value="${esc(l[k] || '')}" /></div>`).join('')
+        + `<div class="field"><label>Owner</label><select data-k="owner_id">${CRM.meta.users.map((u) => `<option value="${u.id}" ${u.id === l.owner_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div>`
+        + `<div class="field" style="grid-column:1/-1"><label>Categories</label>${CRM.meta.categories.map((c) => `<label style="display:inline-block;margin-right:14px;font-weight:500;color:var(--ink)"><input type="checkbox" data-cat="${c.key}" ${sells.includes(c.key) ? 'checked' : ''}/> ${c.label}</label>`).join('')}</div>`;
+      editDlg.showModal();
+    };
+    editDlg.addEventListener('close', async () => {
+      if (editDlg.returnValue !== 'ok') return;
+      const body = {};
+      editFields.querySelectorAll('[data-k]').forEach((i) => { body[i.dataset.k] = i.value; });
+      body.categories = [...editFields.querySelectorAll('[data-cat]:checked')].map((i) => i.dataset.cat);
+      try { await api(`/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body }); toast('Saved'); } catch (e) { toast(e.message, true); }
+      load();
+    });
+
+    document.querySelectorAll('[data-act]').forEach((b) => b.onclick = async () => {
+      try {
+        await api(`/leads/${encodeURIComponent(id)}/activities`, { method: 'POST', body: { type: b.dataset.act, body: actBody.value } });
+        actBody.value = '';
+        load();
+      } catch (e) { toast(e.message, true); }
+    });
+
+    CRM.header('index').then(load).catch((e) => CRM.toast(e.message, true));
+  </script>
+</body>
+</html>

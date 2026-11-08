@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+</head>
+<body>
+  <main>
+    <form class="card login" id="f">
+      <h1>Autobought CRM</h1>
+      <p class="muted">Dealer sales pipeline</p>
+      <div id="err"></div>
+      <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required /></div>
+      <div class="field"><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required /></div>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+  <script>
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await CRM.api('/auth/login', { method: 'POST', body: { email: email.value, password: pw.value } });
+        const next = CRM.qs('next');
+        location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/index.html';
+      } catch (err) {
+        document.getElementById('err').innerHTML = `<div class="notice bad">${CRM.esc(err.message)}</div>`;
+      }
+    };
+  </script>
+</body>
+</html>
