@@ -171,8 +171,14 @@ curl -X POST localhost:3100/webhooks/lead -H 'x-webhook-secret: <WEBHOOK_SECRET>
 
 ## Deploy (Railway)
 
-1. New service from this repo, **Root Directory `autobought-crm`** (it has its
-   own `railway.json`). Add a volume mounted at `/data` and set `DATA_DIR=/data`.
+Live setup: Railway project **autobought-crm** (its own project, separate from
+the lead bank and portal), service `crm`, deploying `main` of this repo, volume
+`crm-data` at `/data`, served at **https://crm.autobought.ca**. Pushes to
+`main` deploy.
+
+1. New service from this repo (build `npm ci`, start `npm start`, healthcheck
+   `/healthz`; `railway.json` has the same). Add a volume mounted at `/data`
+   and set `DATA_DIR=/data`.
 2. Set the variables in `.env.example`. At minimum: `NODE_ENV`, `APP_URL`,
    `DATA_DIR`, `BOOTSTRAP_ADMIN_*` for the first boot.
 3. In the lead bank, create a **staff** login for the CRM (Settings › Users) and
@@ -184,6 +190,18 @@ curl -X POST localhost:3100/webhooks/lead -H 'x-webhook-secret: <WEBHOOK_SECRET>
    that off once these are live, or the CRM will just merge the duplicates.
 5. Sign in, open Dashboard › Team, and make sure Mike has his mobile number and
    *Text me new leads* ticked.
+
+## Demo mode and going live
+
+The hosted copy currently runs with fictional demo data: `SEED_DEMO=true` loads
+it on first boot into an empty database, with both demo logins using the
+password in `DEMO_PASSWORD`. Seeding never sends texts or emails or calls Meta,
+Stripe or the lead bank, whatever keys are set.
+
+To go live: remove `SEED_DEMO` and `DEMO_PASSWORD`, start from an empty
+database (delete `/data/crm.db*` on the volume, or attach a fresh volume), set
+`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` for the first real admin,
+then add the integration keys.
 
 ## API
 
