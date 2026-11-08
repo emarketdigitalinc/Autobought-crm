@@ -12,7 +12,8 @@
     "dev": "node --watch src/server.js",
     "test": "node --test test/*.test.js",
     "add-user": "node scripts/add-user.js",
-    "sync-ads": "node scripts/sync-ads.js"
+    "sync-ads": "node scripts/sync-ads.js",
+    "demo": "node scripts/demo.js"
   },
   "license": "UNLICENSED",
   "dependencies": {

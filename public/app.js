@@ -32,7 +32,8 @@ const CRM = (() => {
   let meta = null;
   async function header(active) {
     meta = await api('/meta');
-    const links = [['index', 'Leads'], ['dashboard', 'Dashboard'], ['markets', 'Market map']];
+    // The dashboard (ad spend, revenue, commission, team) is admin-only.
+    const links = [['index', 'Leads'], ['map', 'Coverage map'], ...(meta.me.role === 'admin' ? [['dashboard', 'Dashboard']] : [])];
     const h = document.createElement('header');
     h.className = 'top';
     h.innerHTML = `<a class="brand" href="/index.html">Autobought <span>CRM</span></a>
@@ -62,8 +63,6 @@ const CRM = (() => {
   const pct = (r) => `${Math.round(Number(r || 0) * 1000) / 10}%`;
   const STAGE = { new: 'New', contacted: 'Contacted', working: 'Working', signed: 'Signed', lost: 'Lost' };
   const stageBadge = (s) => `<span class="badge ${esc(s)}">${STAGE[s] || esc(s)}</span>`;
-  const AV = { open: 'Open', taken: 'Taken', partly: 'Partly taken', unknown: 'Market?' };
-  const availBadge = (a) => `<span class="badge ${esc(a)}">${AV[a] || esc(a)}</span>`;
   const CAT = { automotive: 'Automotive', powersport: 'Powersport', rv_marine: 'RV/Marine' };
   const cats = (csv) => String(csv || '').split(',').filter(Boolean).map((c) => CAT[c] || c).join(', ');
   const tel = (phone) => {
@@ -73,5 +72,5 @@ const CRM = (() => {
   };
   const qs = (k) => new URLSearchParams(location.search).get(k);
 
-  return { api, toast, header, esc, fmtMinutes, fmtWhen, money, pct, stageBadge, availBadge, cats, tel, qs, STAGE, CAT, get meta() { return meta; } };
+  return { api, toast, header, esc, fmtMinutes, fmtWhen, money, pct, stageBadge, cats, tel, qs, STAGE, CAT, get meta() { return meta; } };
 })();

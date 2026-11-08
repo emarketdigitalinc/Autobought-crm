@@ -69,22 +69,19 @@ async function changeStage(leadId, { stage, lost_reason, note, deal: dealInput }
     reason = lost_reason;
   }
 
+  // Signed is final: the dealer has signed and paid. Billing changes
+  // (pause, cancel) happen on the deal, never by moving the lead.
+  if (lead.stage === 'signed') {
+    return { error: 'This dealer is signed. Signed is final: change the deal (pause or cancel) instead.', status: 409 };
+  }
+
   let dealParts = null;
   if (stage === 'signed') {
     const checked = deals.validateDealInput(dealInput, lead);
     if (checked.error) return { error: checked.error, status: 400 };
     dealParts = checked;
   }
-  if (stage === lead.stage && stage !== 'signed') return { lead };
-
-  // Leaving Signed ends the deal; the lead bank dealer is left as it is.
-  if (lead.stage === 'signed' && stage !== 'signed') {
-    const d = deals.dealForLead(lead.id);
-    if (d && d.status !== 'cancelled') {
-      deals.updateDeal(d.id, { status: 'cancelled' }, actor && actor.id);
-      logActivity(lead.id, 'system', 'Deal cancelled because the lead left Signed. The dealer in the lead bank was not paused: do that there if they should stop receiving leads.', actor && actor.id);
-    }
-  }
+  if (stage === lead.stage) return { lead };
 
   if (stage !== 'new' && stage !== 'lost') markFirstContact(lead);
   if (stage !== lead.stage) setStageRow(lead, stage, actor, reason);

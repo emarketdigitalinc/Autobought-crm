@@ -25,9 +25,9 @@ dealers (Jotform) ─┘    first)    │          └─► lead bank consumer 
 | Page | What it's for |
 |---|---|
 | **Leads** (`/index.html`) | One table, stage filter tabs, A/B filter, search. Shows market open/taken, minutes to first contact (or how long it has been waiting), and a Call button. Average time to first contact at the top. Becomes cards on a phone. |
-| **Lead** (`/lead.html?id=`) | Tap-to-call, details, market availability per category, stage buttons (Lost asks for a reason, Signed asks for the deal), call/text/email/note log, the full activity history, where it came from, what was sent to Meta, and the deal + handoff status. |
-| **Dashboard** (`/dashboard.html`) | Ad spend, cost per lead / Working / Signed, A vs B and by ad, with a date filter. Revenue and commission by month and account manager, 12-month trend. Team settings: who gets new-lead texts, commission %. |
-| **Market map** (`/markets.html`) | Every market × Automotive / Powersport / RV/Marine, open or taken and by whom, plus how many dealer leads each market has produced. Add markets and nearby-town aliases. |
+| **Lead** (`/lead.html?id=`) | Tap-to-call, details, a map of where they are and which signed dealers already cover that spot, stage buttons (Lost asks for a reason, Signed asks for the deal and its lead areas), call/text/email/note log, activity history, where it came from, what was sent to Meta, and the deal + handoff status. |
+| **Coverage map** (`/map.html`) | Canada with every signed dealer's areas: provinces shaded by how many dealers take them, radius circles, dealer leads as pins. Click anywhere to see who covers it; click a dealer to highlight their areas; filter by category. |
+| **Dashboard** (`/dashboard.html`) | **Admins only.** Ad spend, cost per lead / Working / Signed, A vs B and by ad, with a date filter. Revenue and commission by month and account manager, 12-month trend. Team settings: who gets new-lead texts, commission %. |
 
 ## How each part works
 
@@ -59,7 +59,7 @@ the first time a call, text or email is logged (tapping Call logs one), or when
 the lead is moved to Contacted / Working / Signed. Minutes are measured from
 when the person submitted.
 
-**3. Pipeline.** New, Contacted, Working, Signed, Lost. Lost requires one of:
+**3. Pipeline.** New, Contacted, Working, Signed, Lost. **Signed is final**: a signed lead can't be moved to another stage (they've signed and paid). If a dealer pauses or leaves, change the deal's status instead, which affects billing and the coverage map. Lost requires one of:
 Not a dealer, Wrong person, Not interested, Went with competitor, No response,
 Other (Other needs a note). Every change, note, call and system event is in the
 lead's activity log.
@@ -81,20 +81,31 @@ CAPI setup uses; `src/capi.js` has no CRM-specific dependencies beyond the
 dataset up for *conversion leads* and pick **Signed** (or Working) as the
 optimisation event.
 
-**6. Market availability.** A market is a city plus nearby towns (aliases) in a
-province; 20 Canadian markets are pre-loaded and editable. An active or paused
-deal holds each of its markets for each category it has a quota in. Leads are
-matched to a market by city; if none matches, pick one on the lead.
+**6. Lead areas and coverage.** When a dealer signs, you pick where they want
+leads from on a map, the way Meta's location targeting works: whole provinces
+(click to toggle) and/or a city plus a radius (search a town or click the map,
+then drag the radius). Dealers can overlap: nothing is ever "taken". Each lead
+is placed on the map from its city (40 Canadian cities and their nearby towns
+are built in; anything else is looked up with the free Open-Meteo geocoder and
+remembered), so its page shows which signed dealers already cover that spot,
+and whether any of them sell the same category. Areas can be changed later from
+the deal ("Edit areas").
+
+The lead bank only filters by province, so it receives the provinces the areas
+cover (a radius sends its province); the exact areas are written in the
+dealer's note there. Province shapes: Natural Earth via `sane-topojson` (MIT,
+`public/geo/`). Map: Leaflet (bundled in `public/vendor/`) on CARTO's light
+OpenStreetMap tiles.
 
 **7. Signed → portal.** The Signed form takes the package, price, categories
 with monthly quotas, markets, account manager and portal email. The CRM then,
 through the lead bank's own staff API:
 1. creates the dealer (contact details, account manager, start date, and the
-   provinces of their markets so the lead bank only sends them local leads),
+   provinces their lead areas cover, so the lead bank only sends them local leads),
 2. sets a contract per category (RV/Marine → `rv`, see `LEADBANK_CATEGORY_MAP`)
    with the monthly quota and Essential/Application,
 3. creates their dealer portal login with a temporary password,
-4. emails the welcome (portal link, login, password, package, markets),
+4. emails the welcome (portal link, login, password, package, lead areas),
    BCC'd to the account manager.
 
 Each step is remembered, so if one fails the lead shows **Retry handoff** and
@@ -120,6 +131,13 @@ npm run add-user -- --email you@autobought.ca --name "You" --password "at-least-
 npm run add-user -- --email mike@autobought.ca --name Mike --password "..." --phone 7805550100 --commission 0.2 --notify
 npm start                          # http://localhost:3100
 npm test                           # end-to-end, with Meta / Twilio / Resend / lead bank faked
+```
+
+To try it with made-up data (an empty `DATA_DIR` only):
+
+```bash
+DATA_DIR=./demo-data npm run demo   # 15 leads, 3 signed dealers, 30 days of ad spend
+DATA_DIR=./demo-data npm start      # rory@autobought.ca / demo-password-1 (admin), mike@... (rep)
 ```
 
 Send yourself a test lead:
@@ -151,4 +169,4 @@ Webhooks: `GET/POST /webhooks/meta`, `POST /webhooks/jotform?secret=`, `POST /we
 Staff (cookie session): `/api/leads`, `/api/leads/:id` (GET, PATCH),
 `/api/leads/:id/stage`, `/api/leads/:id/activities`, `/api/leads/:id/handoff`,
 `/api/deals/:id`, `/api/dashboard`, `/api/ads/sync`, `/api/ads/:id/source`,
-`/api/revenue?month=`, `/api/markets`, `/api/users`.
+`/api/revenue?month=`, `/api/map`, `/api/geocode?q=`, `/api/deals/:id/areas` (PUT), `/api/users`.

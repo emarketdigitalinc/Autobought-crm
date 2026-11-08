@@ -6,6 +6,7 @@
   <title>Lead · Autobought CRM</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="/favicon.svg" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
 </head>
 <body>
   <main>
@@ -30,8 +31,9 @@
         </div>
 
         <div class="card">
-          <h2>Market availability</h2>
+          <h2>Location &amp; dealers nearby</h2>
           <div id="avail"></div>
+          <div id="leadMap" class="mapbox small-map"></div>
         </div>
 
         <div class="card" id="dealCard" hidden>
@@ -81,10 +83,10 @@
     </form>
   </dialog>
 
-  <dialog id="signDlg">
+  <dialog id="signDlg" class="wide">
     <form method="dialog" id="signForm">
       <h2>Sign this dealer</h2>
-      <p class="small muted">Creates their portal login, sets their categories, markets and quota in the lead bank, and sends the welcome email.</p>
+      <p class="small muted">Creates their portal login, sets their categories, lead areas and quota in the lead bank, and sends the welcome email.</p>
       <div id="signErr"></div>
       <div class="fields">
         <div class="field"><label>Dealer name</label><input id="sDealer" required /></div>
@@ -98,10 +100,20 @@
       </div>
       <h3>Monthly lead quota by category</h3>
       <div class="fields" id="sQuotas"></div>
-      <h3>Markets</h3>
-      <div id="sMarkets" style="max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px"></div>
+      <h3>Where they want leads from</h3>
+      <div id="sAreas"></div>
       <p id="sValue" class="small"></p>
       <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="good" value="ok">Sign &amp; hand off</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="areasDlg" class="wide">
+    <form method="dialog" id="areasForm">
+      <h2>Lead areas</h2>
+      <p class="small muted">Provinces, or a city and radius. Overlap with other dealers is fine. The lead bank is updated with the provinces these cover.</p>
+      <div id="areasErr"></div>
+      <div id="aAreas"></div>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save areas</button></div>
     </form>
   </dialog>
 
@@ -113,7 +125,9 @@
     </form>
   </dialog>
 
+  <script src="/vendor/leaflet/leaflet.js"></script>
   <script src="/app.js"></script>
+  <script src="/areamap.js"></script>
   <script>
     const { api, esc, toast, fmtMinutes, fmtWhen, money, pct, stageBadge, cats, tel, CAT } = CRM;
     const id = CRM.qs('id');
@@ -166,22 +180,41 @@
         <div class="meta">${fmtWhen(a.created_at)}${a.actor_name ? ` · ${esc(a.actor_name)}` : ''}</div></li>`).join('') || '<li class="muted">Nothing yet.</li>';
     }
 
-    function renderAvailability() {
-      const a = data.availability;
-      const options = CRM.meta.markets.map((m) => `<option value="${m.id}" ${a.market && a.market.id === m.id ? 'selected' : ''}>${esc(m.name)}, ${esc(m.province)}</option>`).join('');
-      document.getElementById('avail').innerHTML = `
-        <div class="field"><label>Market</label>
-          <select id="marketSel"><option value="">${a.market ? '' : 'No market matched — pick one'}</option>${options}</select>
-        </div>
-        <div class="avail">${a.categories.map((c) => `
-          <div class="cell ${c.status}"><div class="lbl">${esc(c.label)}</div>
-          ${c.status === 'open' ? '<strong>Open</strong>' : c.status === 'taken' ? `<strong>Taken</strong><div class="small">by <a href="/lead.html?id=${encodeURIComponent(c.deal_lead_id)}">${esc(c.dealer)}</a></div>` : '<span class="muted">Pick a market</span>'}
-          </div>`).join('')}</div>
-        ${!String(data.lead.categories || '') ? '<p class="small muted">We could not tell what they sell, so all three are shown.</p>' : ''}`;
-      document.getElementById('marketSel').onchange = async (e) => {
-        await api(`/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body: { market_id: e.target.value || null } });
-        load();
-      };
+    let leadMap = null;
+    async function renderAvailability() {
+      const l = data.lead;
+      const c = data.coverage;
+      const where = [l.city, l.province].filter(Boolean).join(', ');
+      let html;
+      if (!c.located) {
+        html = `<div class="notice warn">We couldn't place ${esc(where || 'this lead')} on the map. Fix the city or province with Edit.</div>`;
+      } else if (!c.dealers.length) {
+        html = `<p><span class="badge open">No dealers here yet</span> <span class="muted small">${esc(where)}</span></p>`;
+      } else {
+        html = `<p class="small" style="margin:0 0 8px">${c.dealers.length} signed dealer${c.dealers.length > 1 ? 's' : ''} already take leads around ${esc(where)}${c.same_category ? `, ${c.same_category} in what they sell` : ''}. Overlap is fine.</p>
+          <ul class="plain">${c.dealers.map((d) => `<li><a href="/lead.html?id=${encodeURIComponent(d.lead_id)}">${esc(d.dealer_name)}</a>
+            <span class="small muted">${esc(d.area)} · ${esc(d.categories.map((k) => CAT[k]).join(', '))}${d.status === 'paused' ? ' · paused' : ''}</span>
+            ${d.same_category ? '<span class="badge partly">same category</span>' : ''}</li>`).join('')}</ul>`;
+      }
+      document.getElementById('avail').innerHTML = html;
+
+      // The map: this lead, plus the areas of the dealers covering it (or the deal's own areas once signed).
+      const el = document.getElementById('leadMap');
+      if (leadMap) { leadMap.map.remove(); leadMap = null; }
+      const ownAreas = data.deal ? data.deal.areas : [];
+      if (l.lat === null && !ownAreas.length) { el.hidden = true; return; }
+      el.hidden = false;
+      const coveringIds = new Set(c.dealers.map((d) => d.deal_id));
+      const map = await CRM.api('/map');
+      const shown = ownAreas.length ? ownAreas : map.deals.filter((d) => coveringIds.has(d.id)).flatMap((d) => d.areas);
+      const provs = new Set(shown.filter((a) => a.kind === 'province').map((a) => a.province));
+      leadMap = await AreaMap.create(el, {
+        provinceStyle: (code) => provs.has(code) ? { color: AreaMap.BLUE, weight: 1.5, fillColor: AreaMap.BLUE, fillOpacity: 0.2 } : { color: '#8a97ad', weight: 1, fillOpacity: 0.03, fillColor: '#8a97ad' },
+      });
+      for (const a of shown.filter((x) => x.kind === 'radius')) L.circle([a.lat, a.lng], { radius: a.radius_km * 1000, color: AreaMap.BLUE, weight: 1.5, fillOpacity: 0.15 }).bindTooltip(a.label).addTo(leadMap.overlay);
+      if (l.lat !== null) L.circleMarker([l.lat, l.lng], { radius: 7, color: '#fff', weight: 2, fillColor: AreaMap.ORANGE, fillOpacity: 1 }).bindTooltip(esc(l.dealership || l.name || 'Lead')).addTo(leadMap.overlay);
+      leadMap.fitTo(shown, l.lat !== null ? [[l.lat, l.lng]] : []);
+      if (!shown.length && l.lat !== null) leadMap.map.setView([l.lat, l.lng], 7);
     }
 
     function renderDeal() {
@@ -201,7 +234,7 @@
           <dt>Status</dt><dd><select id="dStatus">${CRM.meta.deal_statuses.map((s) => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></dd>
           <dt>Package</dt><dd>${esc(d.package === 'application' ? 'Application' : 'Essential')}, ${d.leads_per_month} leads/month</dd>
           <dt>Quotas</dt><dd>${d.quotas.map((q) => `${esc(CAT[q.category])} ${q.monthly_quota}`).join(' · ')}</dd>
-          <dt>Markets</dt><dd>${d.markets.map((m) => esc(m.name)).join(', ')}</dd>
+          <dt>Lead areas</dt><dd>${d.areas.map((a) => esc(a.label)).join(', ')} <button id="dAreas" class="small-btn">Edit areas</button></dd>
           <dt>Price per lead</dt><dd>${money(d.price_per_lead)}</dd>
           <dt>Monthly value</dt><dd>${money(d.monthly_value)}</dd>
           <dt>Start date</dt><dd>${esc(d.start_date)}${d.end_date ? ` → ${esc(d.end_date)}` : ''}</dd>
@@ -215,6 +248,7 @@
         try { await api(`/deals/${d.id}`, { method: 'PATCH', body: { status: e.target.value } }); toast('Deal updated'); } catch (err) { toast(err.message, true); }
         load();
       };
+      document.getElementById('dAreas').onclick = openAreas;
       document.getElementById('dEdit').onclick = async () => {
         const price = prompt('Price per lead ($)', d.price_per_lead);
         if (price === null) return;
@@ -227,17 +261,19 @@
 
     function renderStages() {
       const cur = data.lead.stage;
+      const final = cur === 'signed';
       document.getElementById('stages').innerHTML = CRM.meta.stages.map((s) =>
-        `<button data-s="${s.key}" class="${s.key === cur ? 'on' : ''}">${s.label}</button>`).join('');
+        `<button data-s="${s.key}" class="${s.key === cur ? 'on' : ''}" ${final && s.key !== cur ? 'disabled' : ''}>${s.label}</button>`).join('');
       document.querySelectorAll('#stages button').forEach((b) => b.onclick = () => moveTo(b.dataset.s));
-      document.getElementById('stageNote').textContent = data.lead.stage_changed_at ? `In ${CRM.STAGE[cur]} since ${fmtWhen(data.lead.stage_changed_at)}.` : '';
+      document.getElementById('stageNote').textContent = final
+        ? `Signed ${fmtWhen(data.lead.signed_at)}. Signed is final; billing changes go on the deal.`
+        : data.lead.stage_changed_at ? `In ${CRM.STAGE[cur]} since ${fmtWhen(data.lead.stage_changed_at)}.` : '';
     }
 
     async function moveTo(stage) {
-      if (stage === data.lead.stage && stage !== 'signed') return;
+      if (stage === data.lead.stage || data.lead.stage === 'signed') return;
       if (stage === 'lost') return openLost();
       if (stage === 'signed') return openSign();
-      if (data.lead.stage === 'signed' && !confirm('Leaving Signed cancels the deal. Continue?')) return;
       try { await api(`/leads/${encodeURIComponent(id)}/stage`, { method: 'POST', body: { stage } }); toast(`Moved to ${CRM.STAGE[stage]}`); } catch (e) { toast(e.message, true); }
       load();
     }
@@ -273,8 +309,9 @@
         const val = existing ? existing.monthly_quota : sells.length === 1 && sells[0] === c.key ? want : '';
         return `<div class="field"><label>${esc(c.label)}</label><input type="number" min="0" data-cat="${c.key}" value="${val}" placeholder="0" /></div>`;
       }).join('');
-      const chosen = new Set(d ? d.markets.map((m) => m.id) : data.availability.market ? [data.availability.market.id] : []);
-      sMarkets.innerHTML = CRM.meta.markets.map((m) => `<label style="font-weight:500;color:var(--ink)"><input type="checkbox" value="${m.id}" ${chosen.has(m.id) ? 'checked' : ''}/> ${esc(m.name)}, ${esc(m.province)}</label>`).join('');
+      // Start from a 50 km radius around the dealership, which is what most want.
+      const start = l.lat !== null ? [{ kind: 'radius', name: l.city, province: l.province, lat: l.lat, lng: l.lng, radius_km: 50, label: `${l.city} +50 km` }]
+        : l.province ? [{ kind: 'province', province: l.province, label: l.province }] : [];
       const preview = () => {
         const n = [...sQuotas.querySelectorAll('input')].reduce((a, i) => a + (Number(i.value) || 0), 0);
         const v = n * (Number(sPrice.value) || 0);
@@ -283,7 +320,9 @@
       signForm.oninput = preview;
       preview();
       signDlg.showModal();
+      AreaMap.picker(sAreas, { areas: start }).then((p) => { signPicker = p; });
     }
+    let signPicker = null;
     signForm.addEventListener('submit', async (e) => {
       if (e.submitter && e.submitter.value !== 'ok') return;
       e.preventDefault();
@@ -294,7 +333,7 @@
         deal: {
           dealer_name: sDealer.value, portal_email: sEmail.value, package: sPackage.value, price_per_lead: sPrice.value,
           start_date: sStart.value, account_manager_id: sAm.value, commission_rate: (Number(sRate.value) || 0) / 100,
-          distribution_mode: sMode.value, quotas, market_ids: [...sMarkets.querySelectorAll('input:checked')].map((i) => Number(i.value)),
+          distribution_mode: sMode.value, quotas, areas: signPicker ? signPicker.get() : [],
         },
       };
       const btn = e.submitter; if (btn) btn.disabled = true;
@@ -306,6 +345,23 @@
       } catch (err) {
         signErr.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`;
       } finally { if (btn) btn.disabled = false; }
+    });
+
+    let areasPicker = null;
+    function openAreas() {
+      areasErr.innerHTML = '';
+      areasDlg.showModal();
+      AreaMap.picker(aAreas, { areas: data.deal.areas }).then((p) => { areasPicker = p; });
+    }
+    areasForm.addEventListener('submit', async (e) => {
+      if (e.submitter && e.submitter.value !== 'ok') return;
+      e.preventDefault();
+      try {
+        const r = await api(`/deals/${data.deal.id}/areas`, { method: 'PUT', body: { areas: areasPicker.get() } });
+        areasDlg.close();
+        toast(r.warning || 'Areas saved', Boolean(r.warning));
+        load();
+      } catch (err) { areasErr.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`; }
     });
 
     const EDIT = [['name', 'Name'], ['phone', 'Phone'], ['email', 'Work email'], ['dealership', 'Dealership'], ['city', 'City'], ['province', 'Province'], ['role', 'Role'], ['sells', 'What they sell'], ['leads_wanted', 'Leads/month wanted'], ['website', 'Website']];

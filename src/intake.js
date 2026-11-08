@@ -5,14 +5,14 @@
 //   2. Shopper on a dealer form? Hand them to the lead bank's consumer
 //      funnel and stop: they never become a dealer lead.
 //   3. Same phone or email as an existing lead? Merge into it.
-//   4. Otherwise create the lead, match its market, work out which ad it
-//      came from, and text + email whoever takes new leads.
+//   4. Otherwise create the lead, work out which ad it came from, text +
+//      email whoever takes new leads, then put it on the map.
 
 const crypto = require('crypto');
 const { db, nowISO, phoneKey, emailKey, logActivity } = require('./db');
 const sources = require('./sources');
 const { isShopperRole, categoriesFrom } = require('./fields');
-const { matchMarket } = require('./markets');
+const { knownPlace, placeLead, provinceCode } = require('./geo');
 const { alertNewLead } = require('./notify');
 const config = require('./config');
 
@@ -81,14 +81,19 @@ async function handleSubmission(sub, inboxId = null) {
     const lead = mergeInto(existing, sub);
     const alerts = await alertNewLead(lead, { repeat: true });
     logAlerts(lead.id, alerts);
-    return { outcome: 'merged', lead };
+    if (lead.lat === null) await placeLead(lead.id);
+    return { outcome: 'merged', lead: refetch(lead.id) };
   }
 
+  // Alert first: speed to lead matters more than the map pin.
   const lead = createLead(sub);
   const alerts = await alertNewLead(lead);
   logAlerts(lead.id, alerts);
-  return { outcome: 'new', lead };
+  if (lead.lat === null) await placeLead(lead.id);
+  return { outcome: 'new', lead: refetch(lead.id) };
 }
+
+const refetch = (id) => db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
 
 function findExisting(phone, email) {
   const pk = phoneKey(phone);
@@ -117,7 +122,7 @@ function rowFrom(sub) {
     const v = sub.attribution[c] !== undefined ? sub.attribution[c] : f[c];
     if (v) row[c] = String(v);
   }
-  if (row.province) row.province = provinceCode(row.province);
+  if (row.province) row.province = normaliseProvince(row.province);
   const cats = categoriesFrom(`${f.sells || ''} ${f.dealership || ''}`);
   if (cats.length) row.categories = cats.join(',');
   return row;
@@ -127,14 +132,16 @@ function createLead(sub) {
   const id = crypto.randomUUID();
   const row = rowFrom(sub);
   Object.assign(row, resolveAd(row));
-  const market = matchMarket(row.city, row.province);
+  // Known towns are placed at once; anything else is geocoded after the alert.
+  const place = knownPlace(row.city, row.province);
   const owner = defaultOwner();
   const now = nowISO();
   const record = {
     id, ...row,
     phone_key: phoneKey(row.phone), email_key: emailKey(row.email),
-    market_id: market ? market.id : null,
-    province: row.province || (market ? market.province : null),
+    lat: place ? place.lat : null,
+    lng: place ? place.lng : null,
+    province: row.province || (place ? place.province : null),
     source: sub.source,
     created_at: sub.created_at || now,
     received_at: now,
@@ -156,9 +163,9 @@ function mergeInto(lead, sub) {
   for (const [k, v] of Object.entries(row)) if (lead[k] === null || lead[k] === undefined || lead[k] === '') sets[k] = v;
   if (sets.phone) sets.phone_key = phoneKey(sets.phone);
   if (sets.email) sets.email_key = emailKey(sets.email);
-  if (!lead.market_id) {
-    const m = matchMarket(sets.city || lead.city, sets.province || lead.province);
-    if (m) sets.market_id = m.id;
+  if (lead.lat === null && (sets.city || lead.city)) {
+    const p = knownPlace(sets.city || lead.city, sets.province || lead.province);
+    if (p) Object.assign(sets, { lat: p.lat, lng: p.lng });
   }
   const keys = Object.keys(sets);
   db.prepare(`UPDATE leads SET ${[...keys.map((k) => `${k} = ?`), 'submissions = submissions + 1'].join(', ')} WHERE id = ?`)
@@ -230,18 +237,8 @@ function backfillAdAttribution() {
   return n;
 }
 
-const PROVINCE_WORDS = {
-  AB: ['alberta', 'alta'], BC: ['british columbia'], MB: ['manitoba'], NB: ['new brunswick'],
-  NL: ['newfoundland', 'labrador'], NS: ['nova scotia'], NT: ['northwest territories'], NU: ['nunavut'],
-  ON: ['ontario'], PE: ['prince edward island', 'pei'], QC: ['quebec', 'québec'], SK: ['saskatchewan', 'sask'], YT: ['yukon'],
-};
-function provinceCode(value) {
-  const v = String(value || '').trim();
-  const up = v.toUpperCase().replace(/[^A-Z]/g, '');
-  if (PROVINCE_WORDS[up]) return up;
-  const low = v.toLowerCase();
-  for (const [code, words] of Object.entries(PROVINCE_WORDS)) if (words.some((w) => low.includes(w))) return code;
-  return v.slice(0, 40) || null;
+function normaliseProvince(value) {
+  return provinceCode(value) || String(value || '').trim().slice(0, 40) || null;
 }
 
 // --- Shoppers ----------------------------------------------------------------
@@ -280,5 +277,5 @@ async function forwardConsumer(sub, inboxId) {
 
 module.exports = {
   receive, processInbox, retryPending, handleSubmission, findExisting, resolveAd, backfillAdAttribution,
-  provinceCode, defaultOwner,
+  defaultOwner,
 };

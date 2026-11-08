@@ -195,7 +195,9 @@
 
     setRange(30);
     month.value = new Date().toISOString().slice(0, 7);
-    CRM.header('dashboard').then(() => Promise.all([loadAds(), loadRevenue(), loadTeam()])).catch((e) => toast(e.message, true));
+    CRM.header('dashboard').then(() => {
+      if (CRM.meta.me.role !== 'admin') { location.href = '/index.html'; throw new Error('Admins only'); }
+    }).then(() => Promise.all([loadAds(), loadRevenue(), loadTeam()])).catch((e) => toast(e.message, true));
   </script>
 </body>
 </html>

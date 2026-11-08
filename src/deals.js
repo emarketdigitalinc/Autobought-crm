@@ -6,6 +6,7 @@ const { db, nowISO, logActivity, CATEGORIES, CATEGORY_LABELS, PACKAGES, PACKAGE_
 const config = require('./config');
 const leadbank = require('./leadbank');
 const { sendEmail, esc } = require('./notify');
+const geo = require('./geo');
 
 const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const money = (n) => Math.round(Number(n) * 100) / 100;
@@ -29,10 +30,8 @@ function validateDealInput(input, lead) {
   const startDate = b.start_date || new Date().toISOString().slice(0, 10);
   if (!isDay(startDate)) return { error: 'The start date needs to be a real date.' };
 
-  const marketIds = [...new Set((b.market_ids || []).map(Number).filter(Boolean))];
-  if (!marketIds.length) return { error: 'Choose at least one market for this dealer.' };
-  const known = db.prepare(`SELECT id FROM markets WHERE id IN (${marketIds.map(() => '?').join(',')})`).all(...marketIds);
-  if (known.length !== marketIds.length) return { error: 'One of those markets no longer exists.' };
+  const checkedAreas = geo.cleanAreas(b.areas);
+  if (checkedAreas.error) return { error: checkedAreas.error };
 
   const email = String(b.portal_email || lead.email || '').trim().toLowerCase();
   if (!email.includes('@')) return { error: 'A portal login email is needed.' };
@@ -62,11 +61,17 @@ function validateDealInput(input, lead) {
       portal_email: email,
     },
     quotas,
-    marketIds,
+    areas: checkedAreas.areas,
   };
 }
 
-function saveDeal(lead, { deal, quotas, marketIds }) {
+function writeAreas(dealId, areas) {
+  db.prepare('DELETE FROM deal_areas WHERE deal_id = ?').run(dealId);
+  const ins = db.prepare('INSERT INTO deal_areas (deal_id, kind, province, label, lat, lng, radius_km) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  for (const a of areas) ins.run(dealId, a.kind, a.province, a.label, a.lat, a.lng, a.radius_km);
+}
+
+function saveDeal(lead, { deal, quotas, areas }) {
   const existing = db.prepare('SELECT * FROM deals WHERE lead_id = ?').get(lead.id);
   const now = nowISO();
   let id;
@@ -83,9 +88,8 @@ function saveDeal(lead, { deal, quotas, marketIds }) {
       id = db.prepare(`INSERT INTO deals (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals).lastInsertRowid;
     }
     db.prepare('DELETE FROM deal_quotas WHERE deal_id = ?').run(id);
-    db.prepare('DELETE FROM deal_markets WHERE deal_id = ?').run(id);
     for (const [c, n] of Object.entries(quotas)) db.prepare('INSERT INTO deal_quotas (deal_id, category, monthly_quota) VALUES (?, ?, ?)').run(id, c, n);
-    for (const m of marketIds) db.prepare('INSERT INTO deal_markets (deal_id, market_id) VALUES (?, ?)').run(id, m);
+    writeAreas(id, areas);
   })();
   return getDeal(id);
 }
@@ -96,7 +100,7 @@ function getDeal(id) {
   ).get(id);
   if (!d) return null;
   d.quotas = db.prepare('SELECT category, monthly_quota FROM deal_quotas WHERE deal_id = ?').all(id);
-  d.markets = db.prepare('SELECT m.* FROM deal_markets dm JOIN markets m ON m.id = dm.market_id WHERE dm.deal_id = ? ORDER BY m.name').all(id);
+  d.areas = db.prepare('SELECT * FROM deal_areas WHERE deal_id = ? ORDER BY kind DESC, label').all(id);
   return d;
 }
 const dealForLead = (leadId) => {
@@ -199,6 +203,32 @@ function revenueReport(month = thisMonth()) {
   };
 }
 
+// The lead bank filters by province only, so a radius sends its province.
+// The exact radius is written on the dealer's record for staff to see.
+const provincesOf = (deal) => [...new Set(deal.areas.map((a) => a.province))].join(',');
+const areasNote = (deal) => `Signed through the CRM. Lead areas: ${deal.areas.map((a) => a.label).join(', ')}.`;
+
+// A signed dealer changing where they want leads from.
+async function updateAreas(dealId, input, actorId) {
+  const deal = getDeal(dealId);
+  if (!deal) return { error: 'Deal not found.' };
+  const checked = geo.cleanAreas(input);
+  if (checked.error) return { error: checked.error };
+  writeAreas(dealId, checked.areas);
+  const fresh = getDeal(dealId);
+  logActivity(deal.lead_id, 'system', `Lead areas changed to: ${fresh.areas.map((a) => a.label).join(', ')}.`, actorId);
+  if (deal.lb_dealer_id && leadbank.isConfigured()) {
+    try {
+      await leadbank.call('PATCH', `/api/dealers/${encodeURIComponent(deal.lb_dealer_id)}`, { provinces: provincesOf(fresh), contact_note: areasNote(fresh) });
+      logActivity(deal.lead_id, 'handoff', `Lead bank: provinces updated to ${provincesOf(fresh)}.`, actorId);
+    } catch (err) {
+      logActivity(deal.lead_id, 'handoff', `Could not update the lead bank's provinces: ${err.message}`, actorId);
+      return { deal: fresh, warning: `Saved here, but the lead bank was not updated: ${err.message}` };
+    }
+  }
+  return { deal: fresh };
+}
+
 // --- Handoff to the lead bank ------------------------------------------------------
 
 const tempPassword = () => crypto.randomBytes(12).toString('base64url').replace(/[-_]/g, 'x').slice(0, 14);
@@ -222,7 +252,7 @@ async function runHandoff(dealId, actorId = null) {
     return deal;
   }
 
-  const provinces = [...new Set(deal.markets.map((m) => m.province))].join(',');
+  const provinces = provincesOf(deal);
   const am = deal.account_manager_name || null;
   let password = null;
 
@@ -234,7 +264,7 @@ async function runHandoff(dealId, actorId = null) {
       contact_name: lead.name, contact_phone: lead.phone, contact_email: lead.email,
       website: lead.website, city: lead.city, account_manager: am, started_on: deal.start_date,
       provinces,
-      contact_note: `Signed through the CRM. Markets: ${deal.markets.map((m) => m.name).join(', ')}.`,
+      contact_note: areasNote(deal),
     };
     if (!deal.lb_dealer_id) {
       const { dealer } = await leadbank.call('POST', '/api/dealers', dealerFields);
@@ -304,11 +334,11 @@ async function runHandoff(dealId, actorId = null) {
 function welcomeMessage(deal, lead, password) {
   const login = leadbank.portalUrl();
   const cats = deal.quotas.map((q) => `${CATEGORY_LABELS[q.category]}: ${q.monthly_quota} leads/month`);
-  const markets = deal.markets.map((m) => `${m.name}, ${m.province}`).join(' · ');
+  const markets = deal.areas.map((a) => a.label).join(' · ');
   const first = String(lead.name || '').split(' ')[0] || 'there';
   const rows = [
     ['Portal', login], ['Login email', deal.portal_email], ['Temporary password', password],
-    ['Package', `${PACKAGE_LABELS[deal.package]} leads`], ['Categories', cats.join(' · ')], ['Markets', markets],
+    ['Package', `${PACKAGE_LABELS[deal.package]} leads`], ['Categories', cats.join(' · ')], ['Lead areas', markets],
     ['Starts', deal.start_date], ['Your account manager', deal.account_manager_name],
   ].filter(([, v]) => v);
   const subject = `Welcome to Autobought, ${deal.dealer_name}`;
@@ -337,5 +367,5 @@ async function sendWelcome(deal, lead, password) {
 }
 
 module.exports = {
-  validateDealInput, saveDeal, getDeal, dealForLead, updateDeal, revenueReport, runHandoff, billsIn, welcomeMessage, thisMonth,
+  validateDealInput, saveDeal, getDeal, dealForLead, updateDeal, updateAreas, revenueReport, runHandoff, billsIn, welcomeMessage, thisMonth,
 };

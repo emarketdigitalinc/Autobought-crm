@@ -159,3 +159,31 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   .cards-on-mobile td.hide-m { display: none; }
   .cards-on-mobile td.first { display: block; font-size: 16px; }
 }
+
+/* Maps */
+.mapbox { height: 380px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #eef1f5; }
+.mapbox.small-map { height: 260px; margin-top: 10px; }
+.mapbox.big-map { height: min(68vh, 640px); }
+.leaflet-container { font: inherit; }
+dialog.wide { width: min(860px, calc(100vw - 24px)); }
+.picker .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: #e6effa; color: var(--blue); border: 1px solid #c6daf2; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.chip.sel { background: #fdeee3; color: #b5530f; border-color: #f6c9a6; }
+.chip button { border: 0; background: transparent; padding: 0 6px; font-size: 16px; line-height: 1; color: inherit; }
+.searchbox { position: relative; flex: 1; min-width: 180px; }
+.searchbox input { width: 100%; }
+.searchbox .results { position: absolute; z-index: 1000; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(14,37,68,.15); margin-top: 2px; }
+.searchbox .results button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; padding: 8px 10px; font-weight: 500; }
+.searchbox .results button:hover { background: var(--grey-bg); }
+.radius { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; color: var(--ink); }
+.small-btn { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+ul.plain { list-style: none; padding: 0; margin: 0; }
+ul.plain li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+ul.plain li:last-child { border-bottom: 0; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.dealer-list li { cursor: pointer; }
+.dealer-list li.on { background: #f4f8fd; }
+
+[hidden] { display: none !important; }
+dialog { max-height: calc(100vh - 32px); overflow: auto; }

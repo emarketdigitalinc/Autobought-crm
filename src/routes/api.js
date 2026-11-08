@@ -8,7 +8,7 @@ const {
 const auth = require('../auth');
 const pipeline = require('../pipeline');
 const deals = require('../deals');
-const markets = require('../markets');
+const geo = require('../geo');
 const ads = require('../ads');
 const leadbank = require('../leadbank');
 const config = require('../config');
@@ -57,28 +57,13 @@ router.get('/meta', (req, res) => {
     deal_statuses: DEAL_STATUSES,
     sources: SOURCES,
     users: db.prepare('SELECT id, name, commission_rate FROM users WHERE active = 1 ORDER BY name').all(),
-    markets: db.prepare('SELECT id, name, province FROM markets WHERE active = 1 ORDER BY province, name').all(),
+    provinces: Object.entries(require('../db').PROVINCES).map(([code, name]) => ({ code, name })),
     leadbank_connected: leadbank.isConfigured(),
     me: req.user,
   });
 });
 
 // --- Leads -----------------------------------------------------------------------------
-
-function availabilityIndex() {
-  const idx = {};
-  for (const h of markets.holdings()) (idx[h.market_id] ||= []).push(h);
-  return idx;
-}
-function quickAvailability(lead, idx) {
-  if (!lead.market_id) return 'unknown';
-  const cats = String(lead.categories || '').split(',').filter(Boolean);
-  const held = (idx[lead.market_id] || []).filter((h) => h.lead_id !== lead.id);
-  const check = cats.length ? cats : CATEGORIES;
-  const taken = check.filter((c) => held.some((h) => h.category === c));
-  if (!taken.length) return 'open';
-  return taken.length === check.length ? 'taken' : 'partly';
-}
 
 router.get('/leads', (req, res) => {
   const where = [];
@@ -92,19 +77,19 @@ router.get('/leads', (req, res) => {
     params.push(q, q, q, q, pk ? `%${pk}%` : '__none__');
   }
   const rows = db.prepare(
-    `SELECT l.*, m.name AS market_name, u.name AS owner_name
-       FROM leads l LEFT JOIN markets m ON m.id = l.market_id LEFT JOIN users u ON u.id = l.owner_id
+    `SELECT l.*, u.name AS owner_name
+       FROM leads l LEFT JOIN users u ON u.id = l.owner_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY l.created_at DESC LIMIT 1000`
   ).all(...params);
-  const idx = availabilityIndex();
+  const deals = geo.liveDeals();
   const leads = rows.map((l) => ({
     id: l.id, name: l.name, dealership: l.dealership, phone: l.phone, email: l.email, city: l.city,
     role: l.role, categories: l.categories, leads_wanted: l.leads_wanted, source: l.source,
     ad_name: l.ad_name || l.utm_content, campaign_name: l.campaign_name || l.utm_campaign,
     stage: l.stage, lost_reason: l.lost_reason, created_at: l.created_at, first_contact_at: l.first_contact_at,
     minutes_to_first_contact: pipeline.minutesBetween(l.created_at, l.first_contact_at),
-    market_name: l.market_name, availability: quickAvailability(l, idx), owner_name: l.owner_name, submissions: l.submissions,
+    province: l.province, coverage: summarise(geo.coverageFor(l, deals)), owner_name: l.owner_name, submissions: l.submissions,
   }));
 
   const counts = Object.fromEntries(STAGES.map((s) => [s, 0]));
@@ -120,6 +105,9 @@ router.get('/leads', (req, res) => {
   });
 });
 
+// For the table: how many dealers already take leads here, in what they sell.
+const summarise = (c) => ({ located: c.located, dealers: c.dealers.length, same_category: c.same_category });
+
 router.get('/leads/:id', (req, res) => {
   const lead = db.prepare(
     `SELECT l.*, u.name AS owner_name FROM leads l LEFT JOIN users u ON u.id = l.owner_id WHERE l.id = ?`
@@ -132,15 +120,15 @@ router.get('/leads/:id', (req, res) => {
   res.json({
     lead: { ...lead, minutes_to_first_contact: pipeline.minutesBetween(lead.created_at, lead.first_contact_at) },
     activities,
-    availability: markets.availabilityFor(lead),
+    coverage: geo.coverageFor(lead),
     deal: deals.dealForLead(lead.id),
     capi: db.prepare('SELECT stage, event_name, status, attempts, last_error, sent_at FROM capi_events WHERE lead_id = ? ORDER BY id').all(lead.id),
   });
 });
 
-const EDITABLE_LEAD = ['name', 'phone', 'email', 'city', 'province', 'dealership', 'role', 'sells', 'leads_wanted', 'website', 'market_id', 'owner_id', 'categories'];
+const EDITABLE_LEAD = ['name', 'phone', 'email', 'city', 'province', 'dealership', 'role', 'sells', 'leads_wanted', 'website', 'owner_id', 'categories'];
 
-router.patch('/leads/:id', (req, res) => {
+router.patch('/leads/:id', wrap(async (req, res) => {
   const lead = pipeline.getLead(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found.' });
   const body = req.body || {};
@@ -150,10 +138,7 @@ router.patch('/leads/:id', (req, res) => {
     const list = (Array.isArray(sets.categories) ? sets.categories : String(sets.categories).split(',')).map((s) => s.trim()).filter((c) => CATEGORIES.includes(c));
     sets.categories = list.join(',') || null;
   }
-  if (sets.market_id !== undefined && sets.market_id !== null) {
-    sets.market_id = Number(sets.market_id);
-    if (!db.prepare('SELECT 1 FROM markets WHERE id = ?').get(sets.market_id)) return res.status(400).json({ error: 'Unknown market.' });
-  }
+  if (sets.province !== undefined && sets.province !== null) sets.province = geo.provinceCode(sets.province) || sets.province;
   if (sets.owner_id && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(sets.owner_id)) return res.status(400).json({ error: 'Unknown user.' });
   if (sets.phone !== undefined) sets.phone_key = phoneKey(sets.phone);
   if (sets.email !== undefined) sets.email_key = emailKey(sets.email);
@@ -162,8 +147,13 @@ router.patch('/leads/:id', (req, res) => {
   db.prepare(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => sets[k]), lead.id);
   const shown = keys.filter((k) => !k.endsWith('_key'));
   logActivity(lead.id, 'system', `Edited ${shown.map((k) => k.replace(/_id$/, '').replace(/_/g, ' ')).join(', ')}.`, req.user.id);
+  // A new city moves the pin.
+  if (sets.city !== undefined || sets.province !== undefined) {
+    db.prepare('UPDATE leads SET lat = NULL, lng = NULL WHERE id = ?').run(lead.id);
+    await geo.placeLead(lead.id);
+  }
   res.json({ lead: pipeline.getLead(lead.id) });
-});
+}));
 
 router.post('/leads/:id/stage', wrap(async (req, res) => {
   const result = await pipeline.changeStage(req.params.id, req.body || {}, req.user);
@@ -185,17 +175,23 @@ router.post('/leads/:id/handoff', wrap(async (req, res) => {
 
 // --- Deals and revenue -------------------------------------------------------------------
 
+router.put('/deals/:id/areas', wrap(async (req, res) => {
+  const result = await deals.updateAreas(Number(req.params.id), (req.body || {}).areas, req.user.id);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+}));
+
 router.patch('/deals/:id', (req, res) => {
   const result = deals.updateDeal(Number(req.params.id), req.body || {}, req.user.id);
   if (result.error) return res.status(400).json({ error: result.error });
   res.json(result);
 });
 
-router.get('/revenue', (req, res) => res.json(deals.revenueReport(req.query.month)));
+router.get('/revenue', auth.requireAdmin, (req, res) => res.json(deals.revenueReport(req.query.month)));
 
 // --- Ad cost dashboard -------------------------------------------------------------------
 
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', auth.requireAdmin, (req, res) => {
   const data = ads.dashboard(req.query);
   data.health = {
     inbox_failed: db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE status = 'failed'").get().n,
@@ -208,7 +204,7 @@ router.get('/dashboard', (req, res) => {
   res.json(data);
 });
 
-router.post('/ads/sync', wrap(async (req, res) => {
+router.post('/ads/sync', auth.requireAdmin, wrap(async (req, res) => {
   try {
     res.json(await ads.syncAds(req.body || {}));
   } catch (err) {
@@ -216,56 +212,20 @@ router.post('/ads/sync', wrap(async (req, res) => {
   }
 }));
 
-router.post('/ads/:adId/source', (req, res) => {
+router.post('/ads/:adId/source', auth.requireAdmin, (req, res) => {
   res.json({ ad_id: req.params.adId, source_override: ads.setSourceOverride(req.params.adId, (req.body || {}).source) });
 });
 
-// --- Markets -------------------------------------------------------------------------------
+// --- Coverage map --------------------------------------------------------------------------
 
-router.get('/markets', (req, res) => res.json({ markets: markets.overview(), categories: CATEGORIES.map((c) => ({ key: c, label: CATEGORY_LABELS[c] })) }));
+router.get('/map', (req, res) => res.json(geo.mapData()));
 
-router.post('/markets', (req, res) => {
-  const { name, province, aliases } = req.body || {};
-  if (!String(name || '').trim() || !/^[A-Za-z]{2}$/.test(String(province || '').trim())) {
-    return res.status(400).json({ error: 'A market needs a name and a two-letter province.' });
-  }
-  try {
-    const id = db.prepare('INSERT INTO markets (name, province, aliases) VALUES (?, ?, ?)')
-      .run(String(name).trim(), String(province).trim().toUpperCase(), String(aliases || '').trim() || null).lastInsertRowid;
-    rematchLeads();
-    res.status(201).json({ market: db.prepare('SELECT * FROM markets WHERE id = ?').get(id) });
-  } catch (err) {
-    if (/UNIQUE/.test(err.message)) return res.status(409).json({ error: 'That market already exists.' });
-    throw err;
-  }
-});
-
-router.patch('/markets/:id', (req, res) => {
-  const m = db.prepare('SELECT * FROM markets WHERE id = ?').get(req.params.id);
-  if (!m) return res.status(404).json({ error: 'Market not found.' });
-  const b = req.body || {};
-  db.prepare('UPDATE markets SET name = ?, province = ?, aliases = ?, active = ? WHERE id = ?').run(
-    b.name !== undefined ? String(b.name).trim() : m.name,
-    b.province !== undefined ? String(b.province).trim().toUpperCase() : m.province,
-    b.aliases !== undefined ? String(b.aliases).trim() || null : m.aliases,
-    b.active !== undefined ? (b.active ? 1 : 0) : m.active,
-    m.id
-  );
-  rematchLeads();
-  res.json({ market: db.prepare('SELECT * FROM markets WHERE id = ?').get(m.id) });
-});
-
-// A new market or alias may now cover leads that matched nothing before.
-function rematchLeads() {
-  for (const l of db.prepare('SELECT id, city, province FROM leads WHERE market_id IS NULL AND city IS NOT NULL').all()) {
-    const m = markets.matchMarket(l.city, l.province);
-    if (m) db.prepare('UPDATE leads SET market_id = ? WHERE id = ?').run(m.id, l.id);
-  }
-}
+// Search for a city or town (area picker). Known places first, then Open-Meteo.
+router.get('/geocode', wrap(async (req, res) => res.json({ results: await geo.search(String(req.query.q || '')) })));
 
 // --- Team (account managers, who gets new-lead alerts) --------------------------------------
 
-router.get('/users', (req, res) => {
+router.get('/users', auth.requireAdmin, (req, res) => {
   res.json({ users: db.prepare('SELECT * FROM users ORDER BY name').all().map(auth.publicUser) });
 });
 

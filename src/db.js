@@ -88,12 +88,16 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_external ON inbox(kind, external_id) WHERE external_id IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);
 
-  CREATE TABLE IF NOT EXISTS markets (
+  -- Known places, for putting a lead on the map without asking the internet.
+  -- Anything not here is looked up with the Open-Meteo geocoder and cached.
+  CREATE TABLE IF NOT EXISTS places (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     province TEXT NOT NULL,
-    aliases TEXT,                              -- comma separated, e.g. "Sherwood Park, St. Albert"
-    active INTEGER NOT NULL DEFAULT 1,
+    aliases TEXT,                              -- nearby towns that share these coordinates
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'seed',       -- seed | geocoder
     UNIQUE(name, province)
   );
 
@@ -114,7 +118,8 @@ db.exec(`
     leads_wanted_n INTEGER,
     website TEXT,
     message TEXT,
-    market_id INTEGER REFERENCES markets(id),
+    lat REAL,                                  -- where the dealership is, for the coverage map
+    lng REAL,
 
     source TEXT NOT NULL,                      -- A | B
     meta_lead_id TEXT,
@@ -241,11 +246,17 @@ db.exec(`
     PRIMARY KEY (deal_id, category)
   );
 
-  CREATE TABLE IF NOT EXISTS deal_markets (
+  -- Where a signed dealer wants leads from, the way Meta targets locations:
+  -- a whole province, or a point plus a radius. Dealers can overlap freely.
+  CREATE TABLE IF NOT EXISTS deal_areas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
-    market_id INTEGER NOT NULL REFERENCES markets(id),
-    PRIMARY KEY (deal_id, market_id)
+    kind TEXT NOT NULL,                        -- province | radius
+    province TEXT NOT NULL,                    -- the province itself, or the one the centre is in
+    label TEXT NOT NULL,                       -- "Alberta" / "Red Deer +50 km"
+    lat REAL, lng REAL, radius_km REAL
   );
+  CREATE INDEX IF NOT EXISTS idx_deal_areas ON deal_areas(deal_id);
 
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -253,34 +264,58 @@ db.exec(`
   );
 `);
 
-// Starter markets: the cities dealers actually ask about. Only seeded into an
-// empty table, and fully editable on the market map afterwards.
-const STARTER_MARKETS = [
-  ['Calgary', 'AB', 'Airdrie, Cochrane, Chestermere, Okotoks'],
-  ['Edmonton', 'AB', 'Sherwood Park, St. Albert, Spruce Grove, Leduc, Fort Saskatchewan'],
-  ['Red Deer', 'AB', 'Lacombe, Sylvan Lake, Innisfail'],
-  ['Lethbridge', 'AB', 'Taber, Coaldale'],
-  ['Medicine Hat', 'AB', 'Brooks'],
-  ['Grande Prairie', 'AB', ''],
-  ['Fort McMurray', 'AB', 'Wood Buffalo'],
-  ['Lloydminster', 'AB', ''],
-  ['Saskatoon', 'SK', 'Martensville, Warman'],
-  ['Regina', 'SK', 'Moose Jaw'],
-  ['Winnipeg', 'MB', 'Steinbach, Selkirk'],
-  ['Vancouver', 'BC', 'Surrey, Burnaby, Richmond, Coquitlam, Langley, Abbotsford'],
-  ['Kelowna', 'BC', 'Vernon, Penticton, West Kelowna'],
-  ['Kamloops', 'BC', ''],
-  ['Prince George', 'BC', ''],
-  ['Toronto', 'ON', 'Mississauga, Brampton, Vaughan, Markham, Scarborough, Etobicoke'],
-  ['Ottawa', 'ON', 'Kanata, Gatineau'],
-  ['Hamilton', 'ON', 'Burlington, Stoney Creek'],
-  ['London', 'ON', ''],
-  ['Halifax', 'NS', 'Dartmouth'],
+// Starter places: cities dealers are in, with nearby towns as aliases.
+const STARTER_PLACES = [
+  ['Calgary', 'AB', 51.045, -114.057, 'Airdrie, Cochrane, Chestermere, Okotoks'],
+  ['Edmonton', 'AB', 53.546, -113.494, 'Sherwood Park, St. Albert, Spruce Grove, Leduc, Fort Saskatchewan'],
+  ['Red Deer', 'AB', 52.269, -113.812, 'Lacombe, Sylvan Lake, Innisfail, Blackfalds'],
+  ['Lethbridge', 'AB', 49.694, -112.833, 'Taber, Coaldale'],
+  ['Medicine Hat', 'AB', 50.042, -110.677, 'Brooks'],
+  ['Grande Prairie', 'AB', 55.171, -118.795, ''],
+  ['Fort McMurray', 'AB', 56.726, -111.381, 'Wood Buffalo'],
+  ['Lloydminster', 'AB', 53.278, -110.005, ''],
+  ['Saskatoon', 'SK', 52.133, -106.670, 'Martensville, Warman'],
+  ['Regina', 'SK', 50.445, -104.619, ''],
+  ['Moose Jaw', 'SK', 50.393, -105.551, ''],
+  ['Prince Albert', 'SK', 53.200, -105.750, ''],
+  ['Winnipeg', 'MB', 49.895, -97.138, 'Steinbach, Selkirk'],
+  ['Brandon', 'MB', 49.848, -99.950, ''],
+  ['Vancouver', 'BC', 49.283, -123.121, 'Surrey, Burnaby, Richmond, Coquitlam, Langley, Abbotsford, North Vancouver'],
+  ['Victoria', 'BC', 48.428, -123.365, ''],
+  ['Nanaimo', 'BC', 49.166, -123.940, ''],
+  ['Kelowna', 'BC', 49.888, -119.496, 'West Kelowna, Vernon, Penticton'],
+  ['Kamloops', 'BC', 50.674, -120.327, ''],
+  ['Prince George', 'BC', 53.917, -122.750, ''],
+  ['Toronto', 'ON', 43.653, -79.383, 'Mississauga, Brampton, Vaughan, Markham, Scarborough, Etobicoke, Oakville'],
+  ['Ottawa', 'ON', 45.421, -75.697, 'Kanata, Orleans'],
+  ['Hamilton', 'ON', 43.256, -79.869, 'Burlington, Stoney Creek'],
+  ['London', 'ON', 42.984, -81.245, ''],
+  ['Kitchener', 'ON', 43.452, -80.492, 'Waterloo, Cambridge'],
+  ['Windsor', 'ON', 42.315, -83.036, ''],
+  ['Sudbury', 'ON', 46.491, -80.993, ''],
+  ['Thunder Bay', 'ON', 48.381, -89.247, ''],
+  ['Montreal', 'QC', 45.502, -73.567, 'Laval, Longueuil'],
+  ['Quebec City', 'QC', 46.813, -71.208, 'Québec, Levis'],
+  ['Gatineau', 'QC', 45.477, -75.701, ''],
+  ['Halifax', 'NS', 44.649, -63.575, 'Dartmouth, Bedford'],
+  ['Moncton', 'NB', 46.088, -64.778, 'Dieppe'],
+  ['Saint John', 'NB', 45.273, -66.063, ''],
+  ['Fredericton', 'NB', 45.964, -66.643, ''],
+  ["St. John's", 'NL', 47.561, -52.712, 'Mount Pearl'],
+  ['Charlottetown', 'PE', 46.238, -63.131, ''],
+  ['Whitehorse', 'YT', 60.721, -135.057, ''],
+  ['Yellowknife', 'NT', 62.454, -114.372, ''],
 ];
-if (db.prepare('SELECT COUNT(*) AS n FROM markets').get().n === 0) {
-  const ins = db.prepare('INSERT INTO markets (name, province, aliases) VALUES (?, ?, ?)');
-  db.transaction(() => STARTER_MARKETS.forEach((m) => ins.run(...m)))();
+if (db.prepare('SELECT COUNT(*) AS n FROM places').get().n === 0) {
+  const ins = db.prepare('INSERT INTO places (name, province, lat, lng, aliases) VALUES (?, ?, ?, ?, ?)');
+  db.transaction(() => STARTER_PLACES.forEach((p) => ins.run(...p)))();
 }
+
+const PROVINCES = {
+  AB: 'Alberta', BC: 'British Columbia', MB: 'Manitoba', NB: 'New Brunswick', NL: 'Newfoundland and Labrador',
+  NS: 'Nova Scotia', NT: 'Northwest Territories', NU: 'Nunavut', ON: 'Ontario', PE: 'Prince Edward Island',
+  QC: 'Quebec', SK: 'Saskatchewan', YT: 'Yukon',
+};
 
 // --- Small shared helpers -------------------------------------------------
 
@@ -325,5 +360,5 @@ function logActivity(leadId, type, body, actorId = null, at = nowISO()) {
 module.exports = {
   db, DB_PATH, nowISO, phoneKey, emailKey, e164, getSetting, setSetting, logActivity,
   STAGES, STAGE_LABELS, LOST_REASONS, CATEGORIES, CATEGORY_LABELS,
-  PACKAGES, PACKAGE_LABELS, DEAL_STATUSES, SOURCES, CONTACT_ACTIVITY,
+  PACKAGES, PACKAGE_LABELS, DEAL_STATUSES, SOURCES, CONTACT_ACTIVITY, PROVINCES,
 };

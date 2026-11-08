@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Coverage map · Autobought CRM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+</head>
+<body>
+  <main>
+    <div class="pagehead">
+      <div>
+        <h1>Coverage map</h1>
+        <div class="muted small">Where signed dealers take leads from. Overlap is fine. Click anywhere to see who covers that spot.</div>
+      </div>
+      <div class="row" style="gap:8px;align-items:center">
+        <select id="cat"><option value="">All categories</option></select>
+        <label style="font-weight:500;color:var(--ink);margin:0"><input type="checkbox" id="showLeads" checked /> Show dealer leads</label>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow" style="flex:3 1 520px">
+        <div id="map" class="mapbox big-map"></div>
+        <div class="legend">
+          <span><i style="background:rgba(18,99,180,.18);border:1px solid #1263b4"></i>1 dealer</span>
+          <span><i style="background:rgba(18,99,180,.45);border:1px solid #1263b4"></i>2+ dealers</span>
+          <span><i style="background:#f47a2a;border-radius:50%"></i>Open dealer lead</span>
+          <span><i style="background:#127a4b;border-radius:50%"></i>Signed dealer</span>
+        </div>
+      </div>
+      <div class="card grow" style="flex:1 1 280px;max-height:min(72vh,680px);overflow:auto">
+        <h2 id="dealerCount">Signed dealers</h2>
+        <ul class="plain dealer-list" id="dealers"></ul>
+      </div>
+    </div>
+  </main>
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="/app.js"></script>
+  <script src="/areamap.js"></script>
+  <script>
+    const { api, esc, CAT } = CRM;
+    let data; let m; let focus = null;
+    const km = (a, b, c, d) => { const r = (x) => x * Math.PI / 180; const h = Math.sin(r(c - a) / 2) ** 2 + Math.cos(r(a)) * Math.cos(r(c)) * Math.sin(r(d - b) / 2) ** 2; return 12742 * Math.asin(Math.sqrt(h)); };
+
+    const visibleDeals = () => data.deals.filter((d) => !cat.value || d.categories.some((c) => c.key === cat.value));
+    function provinceCount(code) { return visibleDeals().filter((d) => d.areas.some((a) => a.kind === 'province' && a.province === code)).length; }
+
+    function style(code) {
+      if (focus) {
+        const on = focus.areas.some((a) => a.kind === 'province' && a.province === code);
+        return on ? { color: AreaMap.ORANGE, weight: 2, fillColor: AreaMap.ORANGE, fillOpacity: 0.3 } : { color: '#8a97ad', weight: 1, fillOpacity: 0.03, fillColor: '#8a97ad' };
+      }
+      const n = provinceCount(code);
+      return n ? { color: AreaMap.BLUE, weight: 1.5, fillColor: AreaMap.BLUE, fillOpacity: n > 1 ? 0.45 : 0.18 } : { color: '#8a97ad', weight: 1, fillOpacity: 0.03, fillColor: '#8a97ad' };
+    }
+
+    // Who covers a clicked spot.
+    function whoCovers(latlng, province) {
+      const hits = visibleDeals().filter((d) => d.areas.some((a) =>
+        (a.kind === 'province' && a.province === province) || (a.kind === 'radius' && km(a.lat, a.lng, latlng.lat, latlng.lng) <= a.radius_km)));
+      const body = hits.length
+        ? `<strong>${hits.length} dealer${hits.length > 1 ? 's' : ''} here</strong><br>${hits.map((d) => `<a href="/lead.html?id=${encodeURIComponent(d.lead_id)}">${esc(d.dealer_name)}</a> <span style="color:#63708c">${esc(d.categories.map((c) => c.label).join(', '))}</span>`).join('<br>')}`
+        : '<strong>No dealers here yet</strong>';
+      L.popup().setLatLng(latlng).setContent(body).openOn(m.map);
+    }
+
+    function draw() {
+      m.restyle();
+      m.overlay.clearLayers();
+      for (const d of visibleDeals()) {
+        const on = focus && focus.id === d.id;
+        if (focus && !on) continue;
+        for (const a of d.areas.filter((x) => x.kind === 'radius')) {
+          L.circle([a.lat, a.lng], { radius: a.radius_km * 1000, color: on ? AreaMap.ORANGE : AreaMap.BLUE, weight: 1.5, fillOpacity: on ? 0.25 : 0.14, interactive: false })
+            .bindTooltip(`${esc(d.dealer_name)}: ${esc(a.label)}`).addTo(m.overlay);
+        }
+      }
+      if (showLeads.checked) {
+        for (const l of data.leads) {
+          if (cat.value && l.categories && !l.categories.split(',').includes(cat.value)) continue;
+          const signed = l.stage === 'signed';
+          L.circleMarker([l.lat, l.lng], { radius: signed ? 6 : 5, color: '#fff', weight: 1.5, fillColor: signed ? '#127a4b' : AreaMap.ORANGE, fillOpacity: 1 })
+            .bindTooltip(`${esc(l.dealership || l.name || 'Lead')} · ${esc(l.city || '')} · ${CRM.STAGE[l.stage]}`)
+            .on('click', () => { location.href = `/lead.html?id=${encodeURIComponent(l.id)}`; })
+            .addTo(m.overlay);
+        }
+      }
+      const list = visibleDeals();
+      dealerCount.textContent = `Signed dealers (${list.length})`;
+      dealers.innerHTML = list.map((d) => `<li data-id="${d.id}" class="${focus && focus.id === d.id ? 'on' : ''}">
+          <strong>${esc(d.dealer_name)}</strong>${d.status === 'paused' ? ' <span class="badge">paused</span>' : ''}
+          <div class="small muted">${esc(d.categories.map((c) => c.label).join(', '))}</div>
+          <div class="small">${d.areas.map((a) => esc(a.label)).join(' · ')}</div>
+          <div class="small"><a href="/lead.html?id=${encodeURIComponent(d.lead_id)}">Open</a></div></li>`).join('')
+        || '<li class="muted small">No signed dealers yet.</li>';
+      dealers.querySelectorAll('li[data-id]').forEach((li) => li.onclick = (e) => {
+        if (e.target.closest('a')) return;
+        const d = data.deals.find((x) => x.id === Number(li.dataset.id));
+        focus = focus && focus.id === d.id ? null : d;
+        draw();
+        if (focus) m.fitTo(focus.areas);
+      });
+    }
+
+    (async () => {
+      await CRM.header('map');
+      data = await api('/map');
+      cat.innerHTML += data.categories.map((c) => `<option value="${c.key}">${esc(c.label)}</option>`).join('');
+      m = await AreaMap.create(document.getElementById('map'), {
+        provinceStyle: style,
+        provinceTooltip: (code, name) => { const n = provinceCount(code); return `${name}${n ? `: ${n} dealer${n > 1 ? 's' : ''} take the whole province` : ''}`; },
+        onProvinceClick: (code, latlng) => whoCovers(latlng, code),
+        onMapClick: (latlng) => whoCovers(latlng, null),
+      });
+      m.map.setView([54, -100], 3.6);
+      cat.onchange = draw;
+      showLeads.onchange = draw;
+      draw();
+    })().catch((e) => CRM.toast(e.message, true));
+  </script>
+</body>
+</html>

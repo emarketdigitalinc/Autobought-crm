@@ -76,9 +76,12 @@ function readCookie(req, name) {
 }
 
 function setSessionCookie(res, token, expires) {
-  const bits = [`${COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax',
+  // COOKIE_SAMESITE=none lets sign-in work when the CRM is shown inside
+  // another page (a preview pane). Normal deployments leave it as Lax.
+  const embedded = process.env.COOKIE_SAMESITE === 'none';
+  const bits = [`${COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', embedded ? 'SameSite=None' : 'SameSite=Lax',
     `Expires=${new Date(expires).toUTCString()}`];
-  if (config.isProduction()) bits.push('Secure');
+  if (config.isProduction() || embedded) bits.push('Secure');
   res.setHeader('Set-Cookie', bits.join('; '));
 }
 

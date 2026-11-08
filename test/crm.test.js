@@ -44,6 +44,11 @@ global.fetch = async (url, opts = {}) => {
   const body = opts.body && typeof opts.body === 'string' ? (() => { try { return JSON.parse(opts.body); } catch (e) { return opts.body; } })() : opts.body;
   calls.push({ url: u, method: opts.method || 'GET', body, headers: opts.headers || {} });
 
+  if (u.startsWith('https://geocoding-api.open-meteo.com')) {
+    const name = new URL(u).searchParams.get('name');
+    if (/^olds$/i.test(name)) return reply(200, { results: [{ name: 'Olds', admin1: 'Alberta', latitude: 51.79, longitude: -114.106, population: 9000 }] });
+    return reply(200, {});
+  }
   if (u.startsWith('https://api.twilio.com')) return reply(201, { sid: 'SM1' });
   if (u.startsWith('https://api.resend.com')) {
     if (failNextResend) { failNextResend = false; return reply(422, { message: 'domain not verified' }); }
@@ -192,7 +197,7 @@ test('webhooks refuse missing secrets', async () => {
 });
 
 let landingLeadId;
-test('landing page (B) lead via Jotform: fields, UTMs, market, and Mike is texted + emailed', async () => {
+test('landing page (B) lead via Jotform: fields, UTMs, map location, and Mike is texted + emailed', async () => {
   calls.length = 0;
   const res = await http('/webhooks/jotform?secret=jot-secret', {
     method: 'POST',
@@ -215,8 +220,7 @@ test('landing page (B) lead via Jotform: fields, UTMs, market, and Mike is texte
   assert.equal(lead.categories, 'automotive');
   assert.equal(lead.utm_content, 'Carousel B');
   assert.equal(lead.role, 'General Manager');
-  const market = db.prepare('SELECT name FROM markets WHERE id = ?').get(lead.market_id);
-  assert.equal(market.name, 'Edmonton', 'Sherwood Park is an alias of Edmonton');
+  assert.equal(lead.lat, 53.546, 'Sherwood Park is placed with Edmonton');
   assert.equal(lead.owner_id, mike.id);
 
   const sms = calls.find((c) => c.url.includes('twilio'));
@@ -271,7 +275,8 @@ test('Instant Form (A) lead via Meta webhook: answers and campaign/ad set/ad fet
   assert.equal(lead.ad_id, 'ad1');
   assert.equal(lead.categories, 'powersport');
   assert.equal(lead.leads_wanted_n, 20);
-  assert.equal(db.prepare('SELECT name FROM markets WHERE id = ?').get(lead.market_id).name, 'Red Deer');
+  assert.equal(lead.lat, 52.269, 'placed at Red Deer');
+  assert.equal(lead.province, 'AB');
 });
 
 test('duplicates merge on phone or email, keeping the first source', async () => {
@@ -365,16 +370,16 @@ test('Working sends a CRM event to Meta, once', async () => {
   assert.equal(calls.filter((c) => c.url.includes('/999/events')).length, 1);
 });
 
-test('Signed: deal saved, lead bank dealer + contracts + portal login created, welcome emailed, market taken', async () => {
-  const redDeer = db.prepare("SELECT id FROM markets WHERE name = 'Red Deer'").get().id;
-  const bad = await http(`/api/leads/${metaLeadId}/stage`, { method: 'POST', body: { stage: 'signed', deal: { price_per_lead: 30, market_ids: [redDeer] } } });
+test('Signed: deal saved, lead bank dealer + contracts + portal login created, welcome emailed', async () => {
+  const redDeer = [{ kind: 'radius', name: 'Red Deer', lat: 52.269, lng: -113.812, radius_km: 60 }, { kind: 'province', province: 'SK' }];
+  const bad = await http(`/api/leads/${metaLeadId}/stage`, { method: 'POST', body: { stage: 'signed', deal: { price_per_lead: 30, areas: redDeer } } });
   assert.equal(bad.status, 400, 'needs a quota');
 
   calls.length = 0;
   failNextResend = false;
   const r = await http(`/api/leads/${metaLeadId}/stage`, {
     method: 'POST',
-    body: { stage: 'signed', deal: { package: 'application', price_per_lead: 35, quotas: { powersport: 20 }, market_ids: [redDeer], account_manager_id: mike.id, start_date: '2026-11-01' } },
+    body: { stage: 'signed', deal: { package: 'application', price_per_lead: 35, quotas: { powersport: 20 }, areas: redDeer, account_manager_id: mike.id, start_date: '2026-11-01' } },
   });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   const d = r.json.deal;
@@ -385,7 +390,9 @@ test('Signed: deal saved, lead bank dealer + contracts + portal login created, w
 
   const dealer = bank.dealers[d.lb_dealer_id];
   assert.equal(dealer.name, 'Prairie Powersports');
-  assert.equal(dealer.provinces, 'AB');
+  assert.equal(dealer.provinces, 'AB,SK', 'a radius sends its province; the lead bank filters by province');
+  assert.match(dealer.contact_note, /Red Deer \+60 km, Saskatchewan/);
+  assert.deepEqual(d.areas.map((a) => a.label).sort(), ['Red Deer +60 km', 'Saskatchewan']);
   assert.equal(dealer.notify_emails, 'jane@prairiepower.ca');
   assert.equal(dealer.account_manager, 'Mike');
   assert.deepEqual(bank.contracts.map((c) => [c.vehicle_category, c.info_depth, c.monthly_quota]), [['powersport', 'application', 20]]);
@@ -401,22 +408,51 @@ test('Signed: deal saved, lead bank dealer + contracts + portal login created, w
   // Signed teaches Meta "Signed" (Working was already sent).
   assert.deepEqual(calls.filter((c) => c.url.includes('/999/events')).map((c) => c.body.data[0].event_name), ['Signed']);
 
-  // Another powersport dealer in Red Deer now sees it taken.
+  // A lead near Red Deer (Lacombe, ~25 km) sees the dealer already covering it. Overlap is allowed.
   const other = await http('/webhooks/lead', { method: 'POST', headers: { 'x-webhook-secret': 'flat-secret' }, body: { name: 'Rival Rick', phone: '4035550777', city: 'Lacombe', sells: 'Snowmobiles and boats', dealership: 'Rick Rides', external_id: 'zap-3' } });
-  const av = (await http(`/api/leads/${other.json.lead_id}`)).json.availability;
-  assert.equal(av.market.name, 'Red Deer');
-  assert.deepEqual(av.categories.map((c) => [c.category, c.status]), [['powersport', 'taken'], ['rv_marine', 'open']]);
-  assert.equal(av.categories[0].dealer, 'Prairie Powersports');
-  const map = (await http('/api/markets')).json.markets.find((m) => m.name === 'Red Deer');
-  assert.equal(map.cells.find((c) => c.category === 'powersport').status, 'taken');
+  const cov = (await http(`/api/leads/${other.json.lead_id}`)).json.coverage;
+  assert.equal(cov.dealers.length, 1);
+  assert.equal(cov.dealers[0].dealer_name, 'Prairie Powersports');
+  assert.equal(cov.dealers[0].area, 'Red Deer +60 km');
+  assert.equal(cov.same_category, 1);
+  // A town the CRM doesn't know is geocoded (Olds, ~55 km from Red Deer: inside the radius).
+  const olds = await http('/webhooks/lead', { method: 'POST', headers: { 'x-webhook-secret': 'flat-secret' }, body: { name: 'Olive Olds', phone: '4035550888', city: 'Olds', dealership: 'Olds Auto', external_id: 'zap-4' } });
+  const oldsLead = db.prepare('SELECT * FROM leads WHERE id = ?').get(olds.json.lead_id);
+  assert.equal(oldsLead.lat, 51.79);
+  assert.equal((await http(`/api/leads/${oldsLead.id}`)).json.coverage.dealers.length, 1);
+  // Calgary is outside the radius and not in Saskatchewan.
+  const yyc = await http('/webhooks/lead', { method: 'POST', headers: { 'x-webhook-secret': 'flat-secret' }, body: { name: 'Cal Gary', phone: '4035550999', city: 'Calgary', external_id: 'zap-5' } });
+  assert.equal((await http(`/api/leads/${yyc.json.lead_id}`)).json.coverage.dealers.length, 0);
+  const map = (await http('/api/map')).json;
+  assert.equal(map.deals.length, 1);
+  assert.deepEqual(map.provinces.SK.map((x) => x.dealer_name), ['Prairie Powersports']);
+});
+
+test('Signed is final: the lead cannot be moved, but the deal can be paused or cancelled', async () => {
+  for (const stage of ['working', 'lost', 'new']) {
+    const r = await http(`/api/leads/${metaLeadId}/stage`, { method: 'POST', body: { stage, lost_reason: 'Other', note: 'x' } });
+    assert.equal(r.status, 409);
+  }
+  assert.equal(db.prepare('SELECT stage FROM leads WHERE id = ?').get(metaLeadId).stage, 'signed');
+});
+
+test('changing a signed dealer\'s areas updates the lead bank provinces', async () => {
+  const deal = db.prepare('SELECT * FROM deals WHERE lead_id = ?').get(metaLeadId);
+  const bad = await http(`/api/deals/${deal.id}/areas`, { method: 'PUT', body: { areas: [] } });
+  assert.equal(bad.status, 400);
+  const r = await http(`/api/deals/${deal.id}/areas`, { method: 'PUT', body: { areas: [{ kind: 'province', province: 'Alberta' }, { kind: 'province', province: 'BC' }] } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(bank.dealers[deal.lb_dealer_id].provinces, 'AB,BC');
+  // Calgary is now covered (all of Alberta).
+  const yyc = db.prepare("SELECT id FROM leads WHERE name = 'Cal Gary'").get();
+  assert.equal((await http(`/api/leads/${yyc.id}`)).json.coverage.dealers.length, 1);
 });
 
 test('a failed welcome email stops the handoff, and Retry finishes it with a fresh password', async () => {
-  const edm = db.prepare("SELECT id FROM markets WHERE name = 'Edmonton'").get().id;
   failNextResend = true;
   const r = await http(`/api/leads/${landingLeadId}/stage`, {
     method: 'POST',
-    body: { stage: 'signed', deal: { package: 'essential', price_per_lead: 25, quotas: { automotive: 30 }, market_ids: [edm] } },
+    body: { stage: 'signed', deal: { package: 'essential', price_per_lead: 25, quotas: { automotive: 30 }, areas: [{ kind: 'radius', name: 'Edmonton', lat: 53.546, lng: -113.494, radius_km: 80 }] } },
   });
   assert.equal(r.json.deal.handoff_status, 'failed');
   assert.match(r.json.deal.handoff_error, /domain not verified/);
@@ -469,9 +505,19 @@ test('monthly revenue and commission (Mike 20%)', async () => {
   const deal = db.prepare('SELECT id FROM deals WHERE lead_id = ?').get(landingLeadId);
   await http(`/api/deals/${deal.id}`, { method: 'PATCH', body: { status: 'cancelled', end_date: '2026-11-30' } });
   assert.equal((await http('/api/revenue?month=2026-12')).json.totals.deals, 1);
-  // ...and frees the market.
-  const edm = (await http('/api/markets')).json.markets.find((x) => x.name === 'Edmonton');
-  assert.equal(edm.cells.find((c) => c.category === 'automotive').status, 'open');
+  // A cancelled dealer no longer shows on the coverage map.
+  assert.ok(!(await http('/api/map')).json.deals.some((x) => x.id === deal.id));
+});
+
+test('the dashboard, revenue and team are admin-only', async () => {
+  const saved = cookie;
+  const login = await http('/api/auth/login', { method: 'POST', body: { email: 'mike@autobought.ca', password: 'mike-password-1' } });
+  cookie = login.headers.get('set-cookie').split(';')[0];
+  for (const path of ['/api/dashboard', '/api/revenue', '/api/users']) assert.equal((await http(path)).status, 403, path);
+  assert.equal((await http('/api/ads/sync', { method: 'POST', body: {} })).status, 403);
+  assert.equal((await http('/api/leads')).status, 200, 'reps still work leads');
+  assert.equal((await http('/api/map')).status, 200);
+  cookie = saved;
 });
 
 test('pages need a sign-in', async () => {

@@ -28,7 +28,7 @@
       <table>
         <thead>
           <tr>
-            <th>Lead</th><th>Dealership</th><th>Market</th><th>Sells</th><th>Src</th>
+            <th>Lead</th><th>Dealership</th><th>Dealers nearby</th><th>Sells</th><th>Src</th>
             <th>Stage</th><th>Came in</th><th class="num">To 1st contact</th><th></th>
           </tr>
         </thead>
@@ -38,7 +38,11 @@
   </main>
   <script src="/app.js"></script>
   <script>
-    const { api, esc, fmtMinutes, fmtWhen, stageBadge, availBadge, cats, tel } = CRM;
+    const { api, esc, fmtMinutes, fmtWhen, stageBadge, cats, tel } = CRM;
+    // Overlap is fine: this is only so you know who's already near them.
+    const coverageBadge = (c) => !c.located ? '<span class="badge unknown" title="Not on the map yet">Location?</span>'
+      : !c.dealers ? '<span class="badge open">None yet</span>'
+      : `<span class="badge ${c.same_category ? 'partly' : 'unknown'}" title="${c.same_category} in the same category">${c.dealers} dealer${c.dealers > 1 ? 's' : ''}</span>`;
     let stage = sessionStorageGet('stage') || '';
     function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
     function sessionStorageSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } }
@@ -68,7 +72,7 @@
         return `<tr class="click" data-id="${esc(l.id)}">
           <td class="first"><strong>${esc(l.name || 'No name')}</strong>${l.submissions > 1 ? ` <span class="badge" title="Submitted ${l.submissions} times">×${l.submissions}</span>` : ''}<div class="small muted">${esc(l.role || '')}</div></td>
           <td>${esc(l.dealership || '—')}<div class="small muted">${esc(l.city || '')}</div></td>
-          <td>${availBadge(l.availability)}<div class="small muted">${esc(l.market_name || '')}</div></td>
+          <td>${coverageBadge(l.coverage)}</td>
           <td class="small">${esc(cats(l.categories) || '—')}${l.leads_wanted ? `<div class="muted">${esc(l.leads_wanted)}/mo</div>` : ''}</td>
           <td><span class="badge src" title="${l.source === 'A' ? 'Instant Form' : 'Landing page'}">${esc(l.source)}</span></td>
           <td>${stageBadge(l.stage)}${l.lost_reason ? `<div class="small muted">${esc(l.lost_reason)}</div>` : ''}</td>
