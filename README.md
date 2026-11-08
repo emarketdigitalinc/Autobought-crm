@@ -3,7 +3,7 @@
 The sales pipeline for **signing dealerships**. It sits next to the lead bank
 and dealer portal (`autobought-lead-bank-v2`): ads bring in dealer leads, Mike
 works them, and a signed dealer is handed to the lead bank with a portal login,
-their categories, markets and monthly quota, and a welcome email.
+their categories, lead areas and monthly quota, and a welcome email.
 
 Node 22 + Express + SQLite (one file), plain HTML pages. The same stack as the
 lead bank, so the same person can look after both.
@@ -24,7 +24,7 @@ dealers (Jotform) ─┘    first)    │          └─► lead bank consumer 
 
 | Page | What it's for |
 |---|---|
-| **Leads** (`/index.html`) | One table, stage filter tabs, A/B filter, search. Shows market open/taken, minutes to first contact (or how long it has been waiting), and a Call button. Average time to first contact at the top. Becomes cards on a phone. |
+| **Leads** (`/index.html`) | One table, stage filter tabs, A/B filter, search. Shows how many signed dealers already cover the lead's area, minutes to first contact (or how long it has been waiting), and a Call button. Average time to first contact at the top. Becomes cards on a phone. |
 | **Lead** (`/lead.html?id=`) | Tap-to-call, details, a map of where they are and which signed dealers already cover that spot, stage buttons (Lost asks for a reason, Signed asks for the deal and its lead areas), call/text/email/note log, activity history, where it came from, what was sent to Meta, and the deal + handoff status. |
 | **Coverage map** (`/map.html`) | Canada with every signed dealer's areas: provinces shaded by how many dealers take them, radius circles, dealer leads as pins. Click anywhere to see who covers it; click a dealer to highlight their areas; filter by category. |
 | **Dashboard** (`/dashboard.html`) | **Admins only.** Ad spend, cost per lead / Working / Signed, A vs B and by ad, with a date filter. Revenue and commission by month and account manager, 12-month trend. Team settings: who gets new-lead texts, commission %. |
@@ -98,7 +98,7 @@ dealer's note there. Province shapes: Natural Earth via `sane-topojson` (MIT,
 OpenStreetMap tiles.
 
 **7. Signed → portal.** The Signed form takes the package, price, categories
-with monthly quotas, markets, account manager and portal email. The CRM then,
+with monthly quotas, lead areas (on a map), account manager and portal email. The CRM then,
 through the lead bank's own staff API:
 1. creates the dealer (contact details, account manager, start date, and the
    provinces their lead areas cover, so the lead bank only sends them local leads),
