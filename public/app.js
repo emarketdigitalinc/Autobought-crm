@@ -36,7 +36,7 @@ const CRM = (() => {
     const links = [['index', 'Leads'], ['clients', 'Clients'], ['map', 'Coverage map'], ...(meta.me.role === 'admin' ? [['dashboard', 'Overview']] : [])];
     const h = document.createElement('header');
     h.className = 'top';
-    h.innerHTML = `<a class="brand" href="/index.html">Autobought <span>CRM</span></a>
+    h.innerHTML = `<a class="brand" href="/index.html"><img src="/img/autobought-mark.png" alt="" />Autobought <span>CRM</span></a>
       <nav>${links.map(([p, l]) => `<a href="/${p}.html" class="${p === active ? 'on' : ''}">${l}</a>`).join('')}</nav>
       <div class="who"><span>${esc(meta.me.name)}</span><button class="ghost" id="signout">Sign out</button></div>`;
     document.body.prepend(h);
