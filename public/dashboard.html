@@ -74,6 +74,13 @@
       </table></div>
     </div>
 
+    <div class="card" id="importCard">
+      <h2>Import clients from the portal</h2>
+      <p class="small muted">A CSV with one row per dealer contract (see the column list in the README). Nothing is saved until you press Import, and nothing is sent to the portal: these dealers already exist there.</p>
+      <input type="file" id="importFile" accept=".csv,text/csv" />
+      <div id="importResult" style="margin-top:12px"></div>
+    </div>
+
     <div class="card">
       <h2>Team</h2>
       <p class="small muted">Who gets a text + email the moment a lead arrives, and each account manager's default commission (copied onto each dealer they sign; change a single dealer's rate in Dealer accounts above).</p>
@@ -197,7 +204,37 @@
       to.value = day(now);
       if (p === 'month') from.value = `${day(now).slice(0, 7)}-01`;
       else from.value = day(new Date(Date.now() - (Number(p) - 1) * 86400000));
-      document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', b.dataset.d === String(p)));
+      // --- Import from the portal -----------------------------------------------------
+    let importCsv = null;
+    importFile.onchange = async () => {
+      const f = importFile.files[0];
+      if (!f) return;
+      importCsv = await f.text();
+      try { showImport(await api('/import/clients', { method: 'POST', body: { csv: importCsv, commit: false } }), false); }
+      catch (e) { importResult.innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; }
+    };
+    function showImport(r, done) {
+      const list = r.clients.map((c) => `<tr>
+        <td><strong>${esc(c.dealer_name || '—')}</strong><div class="small muted">rows ${c.lines.join(', ')}${c.leadbank_dealer_id ? ` · portal id ${esc(c.leadbank_dealer_id)}` : ''}</div></td>
+        <td class="small">${Object.entries(c.quotas).map(([k, n]) => `${esc(CRM.CAT[k])} ${n}`).join(', ') || '—'}<div class="muted">${esc(c.provinces.join(', '))}</div></td>
+        <td class="num">${money(c.price_per_lead)}<div class="small muted">${money(c.monthly_value, 0)}/mo</div></td>
+        <td class="small">${esc(c.status)} · since ${esc(c.start_date)}<div class="muted">${esc(c.account_manager || 'Unassigned')}</div></td>
+        <td class="small">${c.errors.length ? `<span class="badge lost">Skip</span> ${esc(c.errors.join('; '))}` : `<span class="badge signed">${done ? 'Imported' : 'Ready'}</span>`}
+          ${c.warnings.length ? `<div class="muted">${esc(c.warnings.join('; '))}</div>` : ''}</td></tr>`).join('');
+      importResult.innerHTML = `
+        <p class="small"><strong>${done ? `Imported ${r.imported} client${r.imported === 1 ? '' : 's'}.` : `${r.ready} ready to import`}</strong>${r.skipped ? `, ${r.skipped} will be skipped (fix the file and choose it again)` : ''}. ${r.rows} rows read.</p>
+        <div class="tablewrap"><table><thead><tr><th>Dealer</th><th>Quotas / provinces</th><th class="num">$/lead</th><th>Status</th><th>Check</th></tr></thead><tbody>${list}</tbody></table></div>
+        ${!done && r.ready ? `<p style="margin-top:12px"><button class="primary" id="importGo">Import ${r.ready} client${r.ready === 1 ? '' : 's'}</button></p>` : ''}
+        ${done ? '<p class="small"><a href="/clients.html">See them on Clients →</a></p>' : ''}`;
+      const go = document.getElementById('importGo');
+      if (go) go.onclick = async () => {
+        go.disabled = true;
+        try { showImport(await api('/import/clients', { method: 'POST', body: { csv: importCsv, commit: true } }), true); loadOverview(); }
+        catch (e) { toast(e.message, true); go.disabled = false; }
+      };
+    }
+
+    document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', b.dataset.d === String(p)));
     }
 
     async function loadAds() {

@@ -115,7 +115,7 @@ function dashboard({ from, to } = {}) {
   // get the leads that went on to sign".
   const leads = db.prepare(
     `SELECT id, source, ad_id, ad_name, campaign_name, adset_name, stage, reached_working_at, signed_at, first_contact_at, created_at
-       FROM leads WHERE substr(created_at, 1, 10) BETWEEN ? AND ?`
+       FROM leads WHERE source != 'I' AND substr(created_at, 1, 10) BETWEEN ? AND ?`
   ).all(from, to);
 
   const spendRows = db.prepare(

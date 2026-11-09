@@ -192,6 +192,34 @@ the lead bank and portal), service `crm`, deploying `main` of this repo, volume
 5. Sign in, open Dashboard › Team, and make sure Mike has his mobile number and
    *Text me new leads* ticked.
 
+## Importing existing dealers from the portal
+
+Overview › **Import clients from the portal** takes a CSV with one row per
+dealer contract (template: `docs/portal-import-template.csv`):
+
+| Column | Notes |
+|---|---|
+| `leadbank_dealer_id` | the dealer's id in the portal; rows with the same id are one client |
+| `dealer_name`, `contact_name`, `contact_phone`, `contact_email` | |
+| `portal_email` | their portal login / where leads are sent (first address used) |
+| `city`, `province` | where the dealership is |
+| `provinces` | provinces they take leads from, e.g. `AB;SK`; blank = their own province |
+| `category` | `automotive`, `powersport`, `rv` or `trailer` (both become RV/Marine) |
+| `package` | `essential` or `application` |
+| `monthly_quota` | leads per month for that category |
+| `distribution_mode` | `shared` or `exclusive` |
+| `price_per_lead` | what they pay per lead (the portal doesn't store this) |
+| `start_date` | `YYYY-MM-DD` |
+| `status` | `active`, `paused` or `cancelled` |
+| `account_manager` | a CRM user's name, e.g. Mike |
+| `notes` | anything else |
+
+It previews first and lists problems per dealer; nothing is saved until you
+press Import. Imported dealers are marked as already set up in the portal, so
+the CRM never creates them there again, and they're left out of the ad and
+sign-up numbers (they weren't won through this month's ads). Importing the same
+dealer twice is refused.
+
 ## Demo mode and going live
 
 The hosted copy currently runs with fictional demo data: `SEED_DEMO=true` loads

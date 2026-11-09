@@ -1,0 +1,3 @@
+leadbank_dealer_id,dealer_name,contact_name,contact_phone,contact_email,portal_email,city,province,provinces,category,package,monthly_quota,distribution_mode,price_per_lead,start_date,status,account_manager,notes
+abc123,Example Motors,Sam Lee,780-555-0101,sam@example.ca,leads@example.ca,Edmonton,AB,AB;SK,automotive,essential,30,shared,25,2026-09-01,active,Mike,
+abc123,Example Motors,,,,,,,,powersport,essential,10,shared,,,,,

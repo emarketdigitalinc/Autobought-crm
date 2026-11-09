@@ -49,11 +49,11 @@ function inMonth(col) { return `substr(${col}, 1, 7) = ?`; }
 function actuals(month) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const spend = one(`SELECT COALESCE(SUM(spend), 0) AS v FROM ad_spend WHERE ${inMonth('date')}`, month).v;
-  const leads = one(`SELECT COUNT(*) AS v FROM leads WHERE ${inMonth('created_at')}`, month).v;
-  const working = one(`SELECT COUNT(*) AS v FROM leads WHERE ${inMonth('reached_working_at')}`, month).v;
-  const signed = one(`SELECT COUNT(*) AS v FROM leads WHERE ${inMonth('signed_at')}`, month).v;
-  const newMrr = one(`SELECT COALESCE(SUM(d.monthly_value), 0) AS v FROM deals d JOIN leads l ON l.id = d.lead_id WHERE ${inMonth('l.signed_at')}`, month).v;
-  const speed = one(`SELECT AVG((julianday(first_contact_at) - julianday(created_at)) * 1440) AS v, COUNT(*) AS n FROM leads WHERE first_contact_at IS NOT NULL AND ${inMonth('created_at')}`, month);
+  const leads = one(`SELECT COUNT(*) AS v FROM leads WHERE source != 'I' AND ${inMonth('created_at')}`, month).v;
+  const working = one(`SELECT COUNT(*) AS v FROM leads WHERE source != 'I' AND ${inMonth('reached_working_at')}`, month).v;
+  const signed = one(`SELECT COUNT(*) AS v FROM leads WHERE source != 'I' AND ${inMonth('signed_at')}`, month).v;
+  const newMrr = one(`SELECT COALESCE(SUM(d.monthly_value), 0) AS v FROM deals d JOIN leads l ON l.id = d.lead_id WHERE l.source != 'I' AND ${inMonth('l.signed_at')}`, month).v;
+  const speed = one(`SELECT AVG((julianday(first_contact_at) - julianday(created_at)) * 1440) AS v, COUNT(*) AS n FROM leads WHERE source != 'I' AND first_contact_at IS NOT NULL AND ${inMonth('created_at')}`, month);
   const collected = one(`SELECT COALESCE(SUM(amount), 0) AS v FROM payments WHERE status = 'paid' AND ${inMonth('paid_at')}`, month).v;
   const rev = deals.revenueReport(month);
   return {
@@ -157,8 +157,8 @@ async function overview(monthIn) {
   // Twelve months of the same, for the trend table.
   const trend = act.revenue.trend.map((t) => {
     const spend = db.prepare(`SELECT COALESCE(SUM(spend), 0) AS v FROM ad_spend WHERE ${inMonth('date')}`).get(t.month).v;
-    const leads = db.prepare(`SELECT COUNT(*) AS v FROM leads WHERE ${inMonth('created_at')}`).get(t.month).v;
-    const signed = db.prepare(`SELECT COUNT(*) AS v FROM leads WHERE ${inMonth('signed_at')}`).get(t.month).v;
+    const leads = db.prepare(`SELECT COUNT(*) AS v FROM leads WHERE source != 'I' AND ${inMonth('created_at')}`).get(t.month).v;
+    const signed = db.prepare(`SELECT COUNT(*) AS v FROM leads WHERE source != 'I' AND ${inMonth('signed_at')}`).get(t.month).v;
     return { ...t, ad_spend: money(spend), leads, signed, margin: money(t.revenue - spend - t.commission) };
   });
 

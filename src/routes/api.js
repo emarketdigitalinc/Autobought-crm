@@ -239,6 +239,18 @@ router.post('/ads/:adId/source', auth.requireAdmin, (req, res) => {
   res.json({ ad_id: req.params.adId, source_override: ads.setSourceOverride(req.params.adId, (req.body || {}).source) });
 });
 
+// --- Import existing clients from the portal (admin) ---------------------------------------
+
+// { csv, commit: false } previews; { csv, commit: true } saves the clean ones.
+router.post('/import/clients', auth.requireAdmin, express.json({ limit: '5mb' }), wrap(async (req, res) => {
+  const importer = require('../importer');
+  const { csv, commit } = req.body || {};
+  if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'Send the CSV file contents.' });
+  const r = commit ? await importer.commit(csv, req.user.id) : importer.preview(csv);
+  if (r.error) return res.status(400).json(r);
+  res.json(r);
+}));
+
 // --- Clients ----------------------------------------------------------------------------------
 
 // Signed dealers as accounts with their value, plus the prospects being worked.
