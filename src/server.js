@@ -34,7 +34,25 @@ async function maybeSeedDemo() {
   }
 }
 
+// Locked out with no terminal to hand (Railway): set RESET_PASSWORD_EMAIL and
+// RESET_PASSWORD (10+ characters), redeploy, sign in, then remove both. The
+// account is switched back on and signed out everywhere else.
+async function maybeResetPassword() {
+  const email = String(process.env.RESET_PASSWORD_EMAIL || '').trim().toLowerCase();
+  const password = process.env.RESET_PASSWORD || '';
+  if (!email || !password) return;
+  const { db } = require('./db');
+  const { hashPassword } = require('./auth');
+  if (password.length < 10) return console.error('[reset] RESET_PASSWORD needs at least 10 characters.');
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  if (!user) return console.error(`[reset] No account for ${email}.`);
+  db.prepare('UPDATE users SET password_hash = ?, active = 1 WHERE id = ?').run(await hashPassword(password), user.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  console.log(`[reset] Password reset for ${email}. Remove RESET_PASSWORD_EMAIL and RESET_PASSWORD now.`);
+}
+
 maybeSeedDemo()
+  .then(() => maybeResetPassword())
   .then(() => bootstrapAdmin())
   .catch((err) => console.error('[bootstrap]', err.message));
 if (config.runScheduler()) startScheduler();
