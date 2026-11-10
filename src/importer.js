@@ -120,6 +120,8 @@ function preview(csvText) {
     }
     const leadsPerMonth = Object.values(quotas).reduce((a, n) => a + n, 0);
     if (!leadsPerMonth) errors.push('No category with a monthly quota');
+    const modes = new Set(rs.map((r) => pick(r, 'distribution_mode').toLowerCase()).filter(Boolean).map((m) => (m.startsWith('excl') ? 'exclusive' : 'shared')));
+    if (modes.size > 1) warnings.push('Some contracts are shared and some exclusive in the portal; the CRM keeps one setting per client (shown as shared). The portal keeps its own per-contract settings untouched');
     if (packages.size > 1) warnings.push('Has both Essential and Application contracts; imported as Application (the CRM keeps one package per client)');
 
     const priceRaw = get('price_per_lead').replace(/[$,\s]/g, '');
